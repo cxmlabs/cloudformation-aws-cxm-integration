@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ORG_UNIT="r-dtpv"
+ORG_UNIT="r-abcd"
 
 
 aws cloudformation delete-stack-instances \
