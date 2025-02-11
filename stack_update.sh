@@ -3,10 +3,14 @@
 ORG_UNIT="r-abcd"
 
 # root stack
-aws cloudformation update-stack --stack-name CxmIntegrationStack-Main \
+aws cloudformation update-stack \
+  --stack-name CxmIntegrationStack-Main \
   --template-body file://cxm-integration-aws-root.yaml \
   --parameters file://params-cxm-root-example.json \
   --capabilities CAPABILITY_NAMED_IAM
+
+aws cloudformation wait stack-update-complete \
+  --stack-name CxmIntegrationStack-Main
 
 # sub accounts stack-set
 aws cloudformation update-stack-set \
@@ -16,6 +20,8 @@ aws cloudformation update-stack-set \
   --capabilities CAPABILITY_NAMED_IAM \
   --permission-model SERVICE_MANAGED \
   --auto-deployment "Enabled=true,RetainStacksOnAccountRemoval=false"
+
+sleep 60
 
 aws cloudformation update-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \

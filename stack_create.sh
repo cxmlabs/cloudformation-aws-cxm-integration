@@ -3,10 +3,14 @@
 ORG_UNIT="r-abcd"
 
 # root stack
-aws cloudformation create-stack --stack-name CxmIntegrationStack-Main \
+aws cloudformation create-stack \
+  --stack-name CxmIntegrationStack-Main \
   --template-body file://cxm-integration-aws-root.yaml \
   --parameters file://params-cxm-root-example.json \
   --capabilities CAPABILITY_NAMED_IAM
+
+aws cloudformation wait stack-create-complete \
+  --stack-name CxmIntegrationStack-Main
 
 # sub accounts stack-set
 aws cloudformation create-stack-set \
