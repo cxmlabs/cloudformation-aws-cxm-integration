@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  # CXM Accounts
+  CXMExternalId:
+    Type: String
+    Description: External ID created for this deployment
+  CXMCustomerAccountId:
+    Type: String
+    Description: Account ID of the instance set up for this deployment
+  # Accounts
+  LambdaBenchmarkAccountId:    # where CXM can modify and execute lambda
+    Type: String
+    Description: Where you give permission to CXM to execute lambda
+    Default: ''
+  ManagementAccountId:
+    Type: String
+    Description: Management Account ID where Cost and Usage Report is located. CXM roles are created here.
+  # Regions
+  ManagementRegion:  # where the S3 for CUR is
+    Type: String
+    Default: "us-east-1"
+    Description: Management region where roles will be created
+  # Prefix / Suffix
+  Prefix:
+    Type: String
+    Default: cxm
+    Description: Generic ID to namespace the stacks
+  RoleSuffix:
+    Type: String
+    Default: ""
+    Description: Role name suffix
+
+Conditions:
+  isManagementAccount: !Equals [!Ref AWS::AccountId, !Ref ManagementAccountId]
+  isManagementRegion: !Equals [!Ref AWS::Region, !Ref ManagementRegion]
+  isManagementAccountAndRegion: !And [Condition: isManagementRegion, Condition: isManagementAccount]
+
+  isLambdaBenchmarkEnabledAccount: !Equals [!Ref LambdaBenchmarkAccountId, !Ref AWS::AccountId ]
+  isLambdaBenchmarkEnabledAccountAndRegion: !And [Condition: isLambdaBenchmarkEnabledAccount, Condition: isManagementAccount]
+
+Resources:
+
+  ################################################################
+  #
+  # Lambda Benchmarking (only in enabled account
+  #
+  ################################################################
+  LambdaBenchmarkingRole:
+    Type: AWS::IAM::Role
+    Condition: isLambdaBenchmarkEnabledAccountAndRegion
+    Properties:
+      RoleName: !Sub '${Prefix}-benchmark-runner${RoleSuffix}'
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AWSLambda_ReadOnlyAccess"    # Lambda managed policy
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaRole"  # Lambda managed policy
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Principal:
+              AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
+
+  BenchmarkingPolicy:
+    Type: AWS::IAM::Policy
+    Condition: isLambdaBenchmarkEnabledAccountAndRegion
+    DependsOn: LambdaBenchmarkingRole
+    Properties:
+      PolicyName: !Sub '${Prefix}-benchmark-runner${RoleSuffix}-policy'
+      Roles:
+        - !Ref LambdaBenchmarkingRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LambdaBenchmarkingEnablement
+            Effect: Allow
+            Action:
+              - lambda:PublishVersion
+              - lambda:UpdateFunctionConfiguration
+              - lambda:CreateAlias
+              - lambda:UpdateAlias
+            Resource: "arn:aws:lambda:*:*:function:*"
+
+          - Sid: LambdaBenchmarkingGarbageCollection
+            Effect: Allow
+            Action:
+              - lambda:DeleteAlias
+              - lambda:DeleteFunction
+            Resource: "*"
+
+
+  ################################################################
+  #
+  # Asset Crawler (everywhere)
+  #
+  ################################################################
+  CxmAssetCrawlerRole:
+    Type: AWS::IAM::Role
+    DependsOn: CloudFormationNotifier
+    Condition: isManagementRegion  # Only one role per account
+    Properties:
+      RoleName: !Sub '${Prefix}-asset-crawler${RoleSuffix}'
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/ReadOnlyAccess"  # Readonly managed policy
+      MaxSessionDuration: 43200
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - ecs-tasks.amazonaws.com
+                - codebuild.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Principal:
+              AWS: !Sub "arn:aws:iam::${ManagementAccountId}:role/${Prefix}-organization-crawler${RoleSuffix}"  # can be chain-assumed by organization main CXM role
+
+  InventoryPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CxmAssetCrawlerRole
+    Condition: isManagementRegion  # Only one role per account
+    Properties:
+      PolicyName: !Sub '${Prefix}-asset-crawler-readonly${RoleSuffix}'
+      Roles:
+        - !Ref 'CxmAssetCrawlerRole'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Explicitly denying data plane API Calls
+          - Effect: Deny
+            Resource: "*"
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - ec2:GetConsoleOutput
+              - ec2:GetConsoleScreenshot
+              - ecr:BatchGetImage
+              - ecr:GetAuthorizationToken
+              - ecr:GetDownloadUrlForLayer
+              - kinesis:Get*
+              - lambda:GetFunction
+              - logs:GetLogEvents
+              - sdb:Select*
+              - sqs:ReceiveMessage
+
+  ################################################################
+  #
+  # Notifications for Feedback Loop
+  #
+  ################################################################
+  IAMCrossAccountNotificationRole:
+    Type: AWS::IAM::Role
+    Condition: isManagementRegion  # Only one per account
+    Properties:
+      RoleName: !Sub '${Prefix}-feedback-loop-control-plane${RoleSuffix}'
+      MaxSessionDuration: 43200
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: cross-account-event-forwarder
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "events:PutEvents"
+                Resource: !Sub "arn:aws:events:*:${CXMCustomerAccountId}:event-bus/control-plane"
+
+  CloudFormationNotifier:
+    Type: AWS::Events::Rule
+    # Condition: EVERYWHERE
+    Properties:
+      Description: Notifies when one of our CloudFormation Stack changes state
+      EventPattern:
+        resources:
+          - wildcard: !Sub "*${Prefix}*"
+        source:
+          - aws.cloudformation
+        detail-type:
+          - "CloudFormation Stack Status Change"
+          - "CloudFormation StackSet StackInstance Status Change"
+        detail:
+          status-details:
+            status: [
+              "CREATE_COMPLETE",
+              "CREATE_FAILED",
+              "DELETE_COMPLETE",
+              "DELETE_FAILED",
+              "ROLLBACK_COMPLETE",
+              "ROLLBACK_FAILED",
+              "UPDATE_COMPLETE",
+              "UPDATE_FAILED",
+              "UPDATE_ROLLBACK_COMPLETE",
+              "UPDATE_ROLLBACK_FAILED"
+            ]
+      State: "ENABLED"
+      Targets:
+        - Id: CloudFormationNotifier
+          Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/control-plane"
+          RoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/${Prefix}-feedback-loop-control-plane${RoleSuffix}"
+
+Outputs:
+  # Asset crawler
+  CxmAssetCrawlerRoleArn:
+    Description: ARN of the Asset Crawler IAM Role
+    Value: !GetAtt CxmAssetCrawlerRole.Arn
+    Condition: isManagementRegion  # Only one role per account
+  CxmAssetCrawlerRoleId:
+    Description: Id of the Asset Crawler IAM Role
+    Value: !GetAtt CxmAssetCrawlerRole.RoleId
+    Condition: isManagementRegion  # Only one role per account
+
+  # Lambda Benchmark
+  LambdaBenchmarkingRoleArn:
+    Description: ARN of the Lambda Benchmarking IAM Role
+    Value: !GetAtt LambdaBenchmarkingRole.Arn
+    Condition: isLambdaBenchmarkEnabledAccountAndRegion
+  LambdaBenchmarkingRoleId:
+    Description: Id of the Lambda Benchmarking IAM Role
+    Value: !GetAtt LambdaBenchmarkingRole.RoleId
+    Condition: isLambdaBenchmarkEnabledAccountAndRegion

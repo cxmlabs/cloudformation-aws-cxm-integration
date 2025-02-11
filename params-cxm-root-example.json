@@ -1,0 +1,17 @@
+[
+  {"ParameterKey": "CXMCustomerAccountId",
+  "ParameterValue": "112233445566"},
+
+  {"ParameterKey": "CXMExternalId",
+  "ParameterValue": "my-cxm-external-id"},
+
+  {"ParameterKey": "CostAndUsageReportS3BucketName",
+  "ParameterValue": "cur-report-s3bucket-abcdef"},
+
+  {"ParameterKey": "ManagementAccountId",
+  "ParameterValue": "123456789101"},
+
+  {"ParameterKey": "RoleSuffix",
+  "ParameterValue": ""}
+
+]

@@ -1,0 +1,380 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  # CXM Accounts
+  CXMExternalId:
+    Type: String
+    Description: External ID created for this deployment
+  CXMCustomerAccountId:
+    Type: String
+    Description: Account ID of the instance set up for this deployment
+  # Accounts
+  ManagementAccountId:
+    Type: String
+    Description: Management Account ID where Cost and Usage Report is located. CXM roles are created here.
+  # CUR Bucket
+  CostAndUsageReportS3BucketName:
+    Type: String
+    Description: Name of the S3 bucket used to store CUR data
+  CostAndUsageReportS3BucketKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: Optional - ARN of the KMS Key used to encrypt CUR data.
+  # Regions
+  CostAndUsageBucketRegion:  # where the S3 for CUR is
+    Type: String
+    Default: "us-east-1"
+    Description: Cost and Usage Bucket region
+  ManagementRegion:  # where the S3 for CUR is
+    Type: String
+    Default: "us-east-1"
+    Description: Management region where roles will be created
+  # Prefix / Suffix
+  Prefix:
+    Type: String
+    Default: cxm
+    Description: Generic ID to namespace the stacks
+  RoleSuffix:
+    Type: String
+    Default: ""
+    Description: Role name suffix
+
+Conditions:
+  isManagementAccount: !Equals [!Ref AWS::AccountId, !Ref ManagementAccountId]
+  isManagementRegion: !Equals [!Ref AWS::Region, !Ref ManagementRegion]
+  isManagementAccountAndRegion: !And [Condition: isManagementRegion, Condition: isManagementAccount]
+
+  isCostAndUsageBucketRegion: !Equals [!Ref AWS::Region, !Ref CostAndUsageBucketRegion]
+  isCostAndUsageBucketAccountAndRegion: !And [Condition: isCostAndUsageBucketRegion, Condition: isManagementAccount]
+
+  isCURKmsKeyArnSet: !Not [ !Equals [ !Ref CostAndUsageReportS3BucketKmsKeyArn, '' ] ]
+
+Resources:
+
+  ################################################################
+  #
+  # Organization Crawler (only in management account and region)
+  #
+  ################################################################
+  CxmOrganizationCrawlerRole:
+    Type: AWS::IAM::Role
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+    Properties:
+      RoleName: !Sub '${Prefix}-organization-crawler${RoleSuffix}'
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess"  # Readonly access managed policy
+      MaxSessionDuration: 43200
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Principal:
+              AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
+  CxmOrganizationReadOnlyPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CxmOrganizationCrawlerRole
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+    Properties:
+      PolicyName: !Sub '${Prefix}-organization-crawler${RoleSuffix}-readonly-policy'
+      Roles:
+        - !Ref CxmOrganizationCrawlerRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DescribeReportDefinitions
+            Effect: Allow
+            Action:
+              - cur:DescribeReportDefinitions
+              - cur:ListTagsForResource
+              - bcm-data-exports:List*
+              - bcm-data-exports:Get*
+              - bcm-data-exports:ListTagsForResource
+              - ce:DescribeCostCategoryDefinition
+              - ce:DescribeNotificationSubscription
+              - ce:Describe*
+              - ce:Get*
+              - ce:List*
+              - ec2:DescribeRegions
+            Resource: "*"
+          - Sid: CostOptimizationHubReadOnlyAccess
+            Effect: Allow
+            Action:
+              - cost-optimization-hub:ListEnrollmentStatuses
+              - cost-optimization-hub:GetPreferences
+              - cost-optimization-hub:GetRecommendation
+              - cost-optimization-hub:ListRecommendations
+              - cost-optimization-hub:ListRecommendationSummaries
+            Resource: "*"
+          - Sid: SSOReadOnlyAccess
+            Effect: Allow
+            Action:
+              - sso-directory:Search*
+              - sso-directory:Describe*
+              - sso-directory:List*
+              - sso-directory:Get*
+              - sso:ListInstances
+              - identitystore:Describe*
+              - identitystore:List*
+            Resource: "*"
+          - Sid: ExplicitDenyToDataPlane
+            Effect: Deny
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - ec2:GetConsoleOutput
+              - ec2:GetConsoleScreenshot
+              - ecr:BatchGetImage
+              - ecr:GetAuthorizationToken
+              - ecr:GetDownloadUrlForLayer
+              - kinesis:Get*
+              - lambda:GetFunction
+              - logs:GetLogEvents
+              - sdb:Select*
+              - sqs:ReceiveMessage
+            Resource: "*"
+          - Sid: AssumeRoleToMemberAccounts  # can assume chain-role on all sub-accounts (if allowed by such role)
+            Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource: "*"
+
+  ################################################################
+  #
+  # Cost and Usage Reader (only in management account and region)
+  #
+  ################################################################
+  CxmCostAndUsageReaderRole:
+    Type: AWS::IAM::Role
+    Condition: isCostAndUsageBucketAccountAndRegion  # Only in management account and region
+    Properties:
+      RoleName: !Sub '${Prefix}-cur-reader${RoleSuffix}'
+      MaxSessionDuration: 43200
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Principal:
+              AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
+  CxmCostAndUsageReaderPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CxmCostAndUsageReaderRole
+    Condition: isCostAndUsageBucketAccountAndRegion  # Only in management account and region
+    Properties:
+      PolicyName: !Sub '${Prefix}-cur-reader${RoleSuffix}-policy'
+      Roles:
+        - !Ref 'CxmCostAndUsageReaderRole'
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "s3:ListBucket"
+            Resource: !Sub "arn:aws:s3:::${CostAndUsageReportS3BucketName}"
+          - Effect: Allow
+            Action:
+              - "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${CostAndUsageReportS3BucketName}/*"
+          - "Fn::If":
+            - isCURKmsKeyArnSet
+            - Effect: Allow
+              Action:
+                - "kms:Decrypt"
+                - "kms:GenerateDataKey"
+              Resource: !Ref CostAndUsageReportS3BucketKmsKeyArn
+              Condition:
+                StringEquals:
+                  kms:EncryptionContext: "arn:aws:s3:::${CostAndUsageReportS3BucketName}"
+            - !Ref AWS::NoValue
+
+  ################################################################
+  #
+  # Notifications (only in management account and region)
+  #
+  ################################################################
+  CxmNotificationRole:
+    Type: AWS::IAM::Role
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+    Properties:
+      RoleName: !Sub "${Prefix}-notification${RoleSuffix}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "events.amazonaws.com"
+
+  CxmNotificationRolePolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CxmNotificationRole
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+    Properties:
+      PolicyName: !Sub "${Prefix}-cur-notification-data-plane${RoleSuffix}-policy"
+      Roles:
+        - !Ref CxmNotificationRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: "events:PutEvents"  # Can notify CXM by pushing events
+            Resource:
+              - !Sub "arn:aws:events:*:${CXMCustomerAccountId}:event-bus/data-plane*"
+              - !Sub "arn:aws:events:*:${CXMCustomerAccountId}:event-bus/control-plane*"
+
+  ################################################################
+  #
+  # Cost and Usage Notifications (only in management account and region)
+  #
+  ################################################################
+  CxmCURBucketEventRule:
+    Type: AWS::Events::Rule
+    DependsOn: CxmNotificationRole
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+    Properties:
+      Name: !Sub "${Prefix}-s3-bucket-change-notifier${RoleSuffix}"
+      Description: "Notifies when changes happen to files in the CUR S3 bucket"
+      EventPattern:
+        source:
+          - "aws.s3"
+        detail-type:
+          - "Object Created"
+          - "Object Deleted"
+        detail:
+          bucket:
+            name:
+              - !Ref CostAndUsageReportS3BucketName
+      Targets:
+        - Id: "SendToDataPlaneBus"
+          Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/data-plane"
+          RoleArn: !GetAtt CxmNotificationRole.Arn
+
+
+  ################################################################
+  #
+  # Notifications about infra changes
+  #
+  ################################################################
+  CxmOrganizationChangesEventRule:
+    Type: AWS::Events::Rule
+    DependsOn: CxmNotificationRole
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+    Properties:
+      Name: !Sub "${Prefix}-organization-changes${RoleSuffix}"
+      Description: "Notifies when changes happen to the organization such as adding an account"
+      EventPattern:
+        source:
+          - "aws.organizations"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource:
+            - "organizations.amazonaws.com"
+          readOnly:
+            - false
+          managementEvent:
+            - true
+      Targets:
+        - Id: "SendToControlPlaneBus"
+          Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/control-plane"
+          RoleArn: !GetAtt CxmNotificationRole.Arn
+
+  CxmOrganizationAccessEventRule:
+    Type: AWS::Events::Rule
+    DependsOn: CxmNotificationRole
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+    Properties:
+      Name: !Sub "${Prefix}-organization-access${RoleSuffix}"
+      Description: "Notifies when the IAM Role used to access the Organization is deployed"
+      EventPattern:
+        source:
+          - "aws.iam"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventName:
+            - "CreateRole"
+            - "DeleteRole"
+          managementEvent:
+            - true
+          requestParameters:
+            roleName:
+              - "cxm*"
+      Targets:
+        - Id: "SendToControlPlaneBus"
+          Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/control-plane"
+          RoleArn: !GetAtt CxmNotificationRole.Arn
+
+  CxmOrganizationCloudFormationRule:
+    Type: AWS::Events::Rule
+    DependsOn: CxmNotificationRole
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+    Properties:
+      Name: !Sub "${Prefix}-organization-cloudformation${RoleSuffix}"
+      Description: "Notifies when the StackSet used to deploy an account is updated"
+      EventPattern:
+        source:
+          - "aws.cloudformation"
+        detail-type:
+          - "CloudFormation StackSet StackInstance Status Change"
+          - "CloudFormation StackSet Status Change"
+        detail:
+          status-details:
+            status:
+              - "CREATE_COMPLETE"
+              - "CREATE_FAILED"
+              - "DELETE_COMPLETE"
+              - "DELETE_FAILED"
+              - "ROLLBACK_COMPLETE"
+              - "ROLLBACK_FAILED"
+              - "UPDATE_COMPLETE"
+              - "UPDATE_FAILED"
+              - "UPDATE_ROLLBACK_COMPLETE"
+              - "UPDATE_ROLLBACK_FAILED"
+      Targets:
+        - Id: "SendToControlPlaneBus"
+          Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/control-plane"
+          RoleArn: !GetAtt CxmNotificationRole.Arn
+
+
+################################################################
+#
+# Outputs
+#
+################################################################
+Outputs:
+  # Organization crawler
+  CxmOrganizationCrawlerRoleArn:
+    Description: ARN of the Organization Crawler IAM Role
+    Value: !GetAtt CxmOrganizationCrawlerRole.Arn
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+  CxmOrganizationCrawlerRoleId:
+    Description: Id of the Organization Crawler IAM Role
+    Value: !GetAtt CxmOrganizationCrawlerRole.RoleId
+    Condition: isManagementAccountAndRegion  # Only in management account and region
+
+  # Cost and Usage Reader
+  CxmCostAndUsageReaderRoleArn:
+    Description: ARN of the CUR Reader IAM Role
+    Value: !GetAtt CxmCostAndUsageReaderRole.Arn
+    Condition: isCostAndUsageBucketAccountAndRegion  # Only in management account and region
+  CxmCostAndUsageReaderRoleId:
+    Description: Id of the CUR Reader IAM Role
+    Value: !GetAtt CxmCostAndUsageReaderRole.RoleId
+    Condition: isCostAndUsageBucketAccountAndRegion  # Only in management account and region
+
+
