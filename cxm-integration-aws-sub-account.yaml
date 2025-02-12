@@ -229,6 +229,23 @@ Resources:
           RoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/${Prefix}-feedback-loop-control-plane${RoleSuffix}"
 
 Outputs:
+  # Echoing inputs for debug
+  Prefix:
+    Description: Generic ID to namespace the stacks
+    Value: !Ref Prefix
+  RoleSuffix:
+    Description: Role name suffix
+    Value: !Ref RoleSuffix
+  ManagementRegion:
+    Description: Management region where roles will be created
+    Value: !Ref ManagementRegion
+  LambdaBenchmarkAccountId:    # where CXM can modify and execute lambda
+    Description: Where you give permission to CXM to execute lambda
+    Value: !Ref LambdaBenchmarkAccountId
+  ManagementAccountId:
+    Description: Management Account ID where Cost and Usage Report is located. CXM roles are created here.
+    Value: !Ref ManagementAccountId
+
   # Asset crawler
   CxmAssetCrawlerRoleArn:
     Description: ARN of the Asset Crawler IAM Role

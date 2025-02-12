@@ -350,13 +350,23 @@ Resources:
           Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/control-plane"
           RoleArn: !GetAtt CxmNotificationRole.Arn
 
-
 ################################################################
 #
 # Outputs
 #
 ################################################################
 Outputs:
+  # Echoing inputs for debug
+  Prefix:
+    Description: Generic ID to namespace the stacks
+    Value: !Ref Prefix
+  RoleSuffix:
+    Description: Role name suffix
+    Value: !Ref RoleSuffix
+  ManagementRegion:
+    Description: Management region where roles will be created
+    Value: !Ref ManagementRegion
+
   # Organization crawler
   CxmOrganizationCrawlerRoleArn:
     Description: ARN of the Organization Crawler IAM Role
@@ -376,5 +386,12 @@ Outputs:
     Description: Id of the CUR Reader IAM Role
     Value: !GetAtt CxmCostAndUsageReaderRole.RoleId
     Condition: isCostAndUsageBucketAccountAndRegion  # Only in management account and region
-
-
+  CostAndUsageReportS3BucketKmsKeyArn:
+    Description: ARN of the KMS Key used to encrypt CUR data
+    Value: !Ref CostAndUsageReportS3BucketKmsKeyArn
+  CostAndUsageReportS3BucketName:
+    Description: Name of the S3 bucket used to store CUR data
+    Value: !Ref CostAndUsageReportS3BucketName
+  CostAndUsageBucketRegion:
+    Description: Cost and Usage Bucket region
+    Value: !Ref CostAndUsageBucketRegion
