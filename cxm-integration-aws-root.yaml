@@ -75,7 +75,6 @@ Resources:
             Condition:
               StringEquals:
                 sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
-                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
   CxmOrganizationReadOnlyPolicy:
     Type: AWS::IAM::Policy
     DependsOn: CxmOrganizationCrawlerRole
@@ -169,7 +168,6 @@ Resources:
             Condition:
               StringEquals:
                 sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
-                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
   CxmCostAndUsageReaderPolicy:
     Type: AWS::IAM::Policy
     DependsOn: CxmCostAndUsageReaderRole
