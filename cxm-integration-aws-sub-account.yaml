@@ -63,7 +63,6 @@ Resources:
             Condition:
               StringEquals:
                 sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
-                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
           - Effect: Allow
             Action:
               - sts:AssumeRole
@@ -73,7 +72,6 @@ Resources:
             Condition:
               StringEquals:
                 sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
-                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
 
   BenchmarkingPolicy:
     Type: AWS::IAM::Policy
@@ -130,7 +128,6 @@ Resources:
             Condition:
               StringEquals:
                 sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
-                aws:SourceAccount: !Ref 'CXMCustomerAccountId'
           - Effect: Allow
             Action:
               - sts:AssumeRole
