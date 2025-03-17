@@ -74,7 +74,7 @@ Resources:
               AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
             Condition:
               StringEquals:
-                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                sts:ExternalId: !Sub '${CXMExternalId}'
   CxmOrganizationReadOnlyPolicy:
     Type: AWS::IAM::Policy
     DependsOn: CxmOrganizationCrawlerRole
@@ -143,7 +143,7 @@ Resources:
             Effect: Allow
             Action:
               - sts:AssumeRole
-            Resource: "*"
+            Resource: !Sub "arn:aws:iam::aws:role/${Prefix}*"
 
   ################################################################
   #
@@ -167,7 +167,7 @@ Resources:
               AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
             Condition:
               StringEquals:
-                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                sts:ExternalId: !Sub '${CXMExternalId}'
   CxmCostAndUsageReaderPolicy:
     Type: AWS::IAM::Policy
     DependsOn: CxmCostAndUsageReaderRole
