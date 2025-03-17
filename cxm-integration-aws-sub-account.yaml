@@ -62,7 +62,7 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringEquals:
-                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                sts:ExternalId: !Sub '${CXMExternalId}'
           - Effect: Allow
             Action:
               - sts:AssumeRole
@@ -71,7 +71,7 @@ Resources:
               AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
             Condition:
               StringEquals:
-                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                sts:ExternalId: !Sub '${CXMExternalId}'
 
   BenchmarkingPolicy:
     Type: AWS::IAM::Policy
@@ -127,7 +127,7 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringEquals:
-                sts:ExternalId: !Sub 'cxm:${CXMExternalId}'
+                sts:ExternalId: !Sub '${CXMExternalId}'
           - Effect: Allow
             Action:
               - sts:AssumeRole
