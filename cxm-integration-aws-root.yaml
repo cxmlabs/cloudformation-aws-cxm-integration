@@ -86,6 +86,39 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          - Sid: DescribeCommitments
+            Effect: Allow
+            Resource: "*"
+            Action:
+              # DynamoDB Reservations
+              - dynamodb:DescribeReservedCapacity
+              - dynamodb:DescribeReservedCapacityOfferings
+              # EC2 Reservations
+              - ec2:DescribeReserved*
+              - ec2:DescribeAvailabilityZones
+              - ec2:DescribeRegions
+              - ec2:DescribeInstances
+              - ec2:DescribeInstanceTypes
+              - ec2:DescribeTags
+              - ec2:GetReserved*
+              # RDS Reservations
+              - rds:DescribeReserved*
+              - rds:ListTagsForResource*",
+              # Redshift Reservations
+              - redshift:DescribeReserved*
+              - redshift:DescribeTags
+              - redshift:GetReserved*",
+              # ElastiCache Reservations
+              - elasticache:DescribeReserved*
+              - elasticache:ListTagsForResource",
+              # ElasticSearch Reservations
+              - es:DescribeReserved*
+              - es:ListTags",
+              # ElasticSearch Reservations
+              - es:DescribeReserved*
+              - es:ListTags",
+              # Saving Plans
+              - savingplans:*"
           - Sid: DescribeReportDefinitions
             Effect: Allow
             Action:
