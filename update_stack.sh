@@ -8,6 +8,10 @@ error_exit() {
   exit 1
 }
 
+warning() {
+  echo "⭕ WARNING: $1" >&2
+}
+
 info() {
   echo "ℹ️ INFO: $1"
 }
@@ -44,6 +48,13 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
+# --------- Get Root OU Function ---------
+get_root_ou() {
+  local ROOT_OU
+  ROOT_OU=$(aws organizations list-roots --query "Roots[0].Id" --output text) || error_exit "Failed to retrieve Root OU."
+  echo "$ROOT_OU"
+}
+
 # --------- Set Defaults if Not Provided ---------
 if [[ -z "$TARGET_ORGANIZATIONAL_UNITS" ]]; then
   TARGET_ORGANIZATIONAL_UNITS=$(get_root_ou) || error_exit "Failed to retrieve Root OU."
@@ -69,7 +80,7 @@ aws cloudformation update-stack \
   --stack-name CxmIntegrationStack-Main \
   --template-body file://cxm-integration-aws-root.yaml \
   --parameters file://params-cxm-root-example.json \
-  --capabilities CAPABILITY_NAMED_IAM || error_exit "Failed to update root stack."
+  --capabilities CAPABILITY_NAMED_IAM || warning "Failed to update root stack or nothing to update."
 
 info "Waiting for root stack update to complete..."
 aws cloudformation wait stack-update-complete \
@@ -98,7 +109,8 @@ aws cloudformation update-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --deployment-targets "OrganizationalUnitIds=${TARGET_ORGANIZATIONAL_UNITS}" \
   --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5" \
-  --regions ${TARGET_REGIONS} || error_exit "Failed to update StackSet instances."
+  --regions ${TARGET_REGIONS} \
+  --operation-preferences "RegionConcurrencyType=PARALLEL" || error_exit "Failed to update StackSet instances."
 
 success "StackSet instances updated successfully."
 
