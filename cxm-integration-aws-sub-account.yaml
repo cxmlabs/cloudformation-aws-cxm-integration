@@ -163,22 +163,22 @@ Resources:
               - ec2:GetReserved*
               # RDS Reservations
               - rds:DescribeReserved*
-              - rds:ListTagsForResource*",
+              - rds:ListTagsForResource*
               # Redshift Reservations
               - redshift:DescribeReserved*
               - redshift:DescribeTags
-              - redshift:GetReserved*",
+              - redshift:GetReserved*
               # ElastiCache Reservations
               - elasticache:DescribeReserved*
-              - elasticache:ListTagsForResource",
+              - elasticache:ListTagsForResource
               # ElasticSearch Reservations
               - es:DescribeReserved*
-              - es:ListTags",
+              - es:ListTags
               # ElasticSearch Reservations
               - es:DescribeReserved*
-              - es:ListTags",
+              - es:ListTags
               # Saving Plans
-              - savingplans:*"
+              - savingplans:*
           # Explicitly denying data plane API Calls
           - Effect: Deny
             Resource: "*"
