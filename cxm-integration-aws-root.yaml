@@ -176,7 +176,7 @@ Resources:
             Effect: Allow
             Action:
               - sts:AssumeRole
-            Resource: !Sub "arn:aws:iam::aws:role/${Prefix}*"
+            Resource: !Sub "arn:aws:iam::*:role/${Prefix}*"
 
   ################################################################
   #
