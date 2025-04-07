@@ -118,8 +118,8 @@ Resources:
               - es:DescribeReserved*
               - es:ListTags
               # Saving Plans
-              - savingplans:Describe*
-              - savingplans:List*
+              - savingsplans:Describe*
+              - savingsplans:List*
           - Sid: DescribeReportDefinitions
             Effect: Allow
             Action:

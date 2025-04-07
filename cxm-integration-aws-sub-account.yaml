@@ -178,8 +178,8 @@ Resources:
               - es:DescribeReserved*
               - es:ListTags
               # Saving Plans
-              - savingplans:Describe*
-              - savingplans:List*
+              - savingsplans:Describe*
+              - savingsplans:List*
           # Explicitly denying data plane API Calls
           - Effect: Deny
             Resource: "*"
