@@ -114,6 +114,8 @@ Resources:
       RoleName: !Sub '${Prefix}-asset-crawler${RoleSuffix}'
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/ReadOnlyAccess"  # Readonly managed policy
+        - "arn:aws:iam::aws:policy/ServiceQuotasFullAccess"         # Required to request increases of SQs for RI and SPs
+        - "arn:aws:iam::aws:policy/AWSSavingsPlansFullAccess"       # Required to manage Savings Plans
       MaxSessionDuration: 43200
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -146,44 +148,60 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: DescribeCommitments
+          - Sid: CommitmentManagementPermissions
             Effect: Allow
             Resource: "*"
             Action:
               # DynamoDB Reservations
               - dynamodb:DescribeReservedCapacity
               - dynamodb:DescribeReservedCapacityOfferings
+              - dynamodb:PurchaseReservedCapacityOfferings
               # EC2 Reservations
               - ec2:DescribeReserved*
               - ec2:DescribeAvailabilityZones
+              - ec2:DescribeAccountAttributes
               - ec2:DescribeRegions
               - ec2:DescribeInstances
               - ec2:DescribeInstanceTypes
               - ec2:DescribeTags
               - ec2:GetReserved*
+              - ec2:ModifyReservedInstances
+              - ec2:PurchaseReservedInstancesOffering
+              - ec2:CreateReservedInstancesListing
+              - ec2:CancelReservedInstancesListing
+              - ec2:GetReservedInstancesExchangeQuote
+              - ec2:AcceptReservedInstancesExchangeQuote
               # RDS Reservations
               - rds:DescribeReserved*
               - rds:ListTagsForResource*
+              - rds:PurchaseReservedDBInstancesOffering
               # Redshift Reservations
               - redshift:DescribeReserved*
               - redshift:DescribeTags
               - redshift:GetReserved*
+              - redshift:AcceptReservedNodeExchange
+              - redshift:PurchaseReservedNodeOffering
               # ElastiCache Reservations
               - elasticache:DescribeReserved*
               - elasticache:ListTagsForResource
+              - elasticache:PurchaseReservedCacheNodesOffering
               # ElasticSearch Reservations
               - es:DescribeReserved*
               - es:ListTags
-              # ElasticSearch Reservations
-              - es:DescribeReserved*
-              - es:ListTags
-              # Saving Plans
-              - savingsplans:Describe*
-              - savingsplans:List*
+              - es:PurchaseReservedElasticsearchInstanceOffering
+              - es:PurchaseReservedInstanceOffering
+              # memoryDB
+              - memorydb:DescribeReserved*
+              - memorydb:ListTags
+              - memorydb:PurchaseReservedNodesOffering
+              # Saving Plans full management
+              - savingsplans:*
           # Explicitly denying data plane API Calls
           - Effect: Deny
             Resource: "*"
             Action:
+              - athena:StartCalculationExecution
+              - athena:StartQueryExecution
               - dynamodb:GetItem
               - dynamodb:BatchGetItem
               - dynamodb:Query
@@ -193,11 +211,13 @@ Resources:
               - ecr:BatchGetImage
               - ecr:GetAuthorizationToken
               - ecr:GetDownloadUrlForLayer
-              - kinesis:Get*
+              - kinesis:GetRecords
+              - kinesis:GetShardIterator
               - lambda:GetFunction
               - logs:GetLogEvents
               - sdb:Select*
               - sqs:ReceiveMessage
+              - rds-data:*
 
   ################################################################
   #
