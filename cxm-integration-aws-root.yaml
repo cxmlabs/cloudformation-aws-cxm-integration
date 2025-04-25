@@ -62,6 +62,9 @@ Resources:
       RoleName: !Sub '${Prefix}-organization-crawler${RoleSuffix}'
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess"  # Readonly access managed policy
+        - "arn:aws:iam::aws:policy/ReadOnlyAccess"                  # Required to collect contextual information in SSO
+        - "arn:aws:iam::aws:policy/ServiceQuotasFullAccess"         # Required to request increases of SQs for RI and SPs
+        - "arn:aws:iam::aws:policy/AWSSavingsPlansFullAccess"       # Required to manage Savings Plans
       MaxSessionDuration: 43200
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -86,45 +89,61 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: DescribeCommitments
+          - Sid: CommitmentManagementPermissions
             Effect: Allow
             Resource: "*"
             Action:
               # DynamoDB Reservations
               - dynamodb:DescribeReservedCapacity
               - dynamodb:DescribeReservedCapacityOfferings
+              - dynamodb:PurchaseReservedCapacityOfferings
               # EC2 Reservations
               - ec2:DescribeReserved*
               - ec2:DescribeAvailabilityZones
+              - ec2:DescribeAccountAttributes
               - ec2:DescribeRegions
               - ec2:DescribeInstances
               - ec2:DescribeInstanceTypes
               - ec2:DescribeTags
               - ec2:GetReserved*
+              - ec2:ModifyReservedInstances
+              - ec2:PurchaseReservedInstancesOffering
+              - ec2:CreateReservedInstancesListing
+              - ec2:CancelReservedInstancesListing
+              - ec2:GetReservedInstancesExchangeQuote
+              - ec2:AcceptReservedInstancesExchangeQuote
               # RDS Reservations
               - rds:DescribeReserved*
               - rds:ListTagsForResource*
+              - rds:PurchaseReservedDBInstancesOffering
               # Redshift Reservations
               - redshift:DescribeReserved*
               - redshift:DescribeTags
               - redshift:GetReserved*
+              - redshift:AcceptReservedNodeExchange
+              - redshift:PurchaseReservedNodeOffering
               # ElastiCache Reservations
               - elasticache:DescribeReserved*
               - elasticache:ListTagsForResource
+              - elasticache:PurchaseReservedCacheNodesOffering
               # ElasticSearch Reservations
               - es:DescribeReserved*
               - es:ListTags
-              # ElasticSearch Reservations
-              - es:DescribeReserved*
-              - es:ListTags
-              # Saving Plans
-              - savingsplans:Describe*
-              - savingsplans:List*
-          - Sid: DescribeReportDefinitions
+              - es:PurchaseReservedElasticsearchInstanceOffering
+              - es:PurchaseReservedInstanceOffering
+              # memoryDB
+              - memorydb:DescribeReserved*
+              - memorydb:ListTags
+              - memorydb:PurchaseReservedNodesOffering
+              # Saving Plans full management
+              - savingsplans:*
+          - Sid: ManageReportDefinitions
             Effect: Allow
             Action:
               - cur:DescribeReportDefinitions
               - cur:ListTagsForResource
+              - cur:ModifyReportDefinition
+              - cur:PutReportDefinition
               - bcm-data-exports:List*
               - bcm-data-exports:Get*
               - bcm-data-exports:ListTagsForResource
@@ -151,13 +170,16 @@ Resources:
               - sso-directory:Describe*
               - sso-directory:List*
               - sso-directory:Get*
-              - sso:ListInstances
+              - sso:List*
+              - sso:Get*
               - identitystore:Describe*
               - identitystore:List*
             Resource: "*"
           - Sid: ExplicitDenyToDataPlane
             Effect: Deny
             Action:
+              - athena:StartCalculationExecution
+              - athena:StartQueryExecution
               - dynamodb:GetItem
               - dynamodb:BatchGetItem
               - dynamodb:Query
@@ -167,11 +189,13 @@ Resources:
               - ecr:BatchGetImage
               - ecr:GetAuthorizationToken
               - ecr:GetDownloadUrlForLayer
-              - kinesis:Get*
+              - kinesis:GetRecords
+              - kinesis:GetShardIterator
               - lambda:GetFunction
               - logs:GetLogEvents
               - sdb:Select*
               - sqs:ReceiveMessage
+              - rds-data:*
             Resource: "*"
           - Sid: AssumeRoleToMemberAccounts  # can assume chain-role on all sub-accounts (if allowed by such role)
             Effect: Allow
