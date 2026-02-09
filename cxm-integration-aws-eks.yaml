@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CXM EKS Cluster Enablement — Grants CXM read-only access to an EKS cluster
+  using the EKS Access Entry API. Deploy once per cluster.
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name of the EKS cluster to grant access to
+  PrincipalArn:
+    Type: String
+    Description: ARN of the CXM IAM role (organization-crawler or asset-crawler from stack outputs)
+  AccessScopeType:
+    Type: String
+    Default: cluster
+    AllowedValues:
+      - cluster
+      - namespace
+    Description: Access scope type — "cluster" for full cluster read access, "namespace" to restrict to specific namespaces
+  AccessScopeNamespaces:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Comma-separated list of Kubernetes namespaces (only used when AccessScopeType is "namespace")
+  KubernetesGroups:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Comma-separated list of Kubernetes groups to associate with the access entry
+  Prefix:
+    Type: String
+    Default: cxm
+    Description: Generic ID to namespace the stacks
+
+Conditions:
+  IsNamespaceScoped: !Equals [!Ref AccessScopeType, "namespace"]
+
+Resources:
+  CxmEksAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      ClusterName: !Ref ClusterName
+      PrincipalArn: !Ref PrincipalArn
+      Type: STANDARD
+      KubernetesGroups: !Ref KubernetesGroups
+      AccessPolicies:
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy
+          AccessScope:
+            Type: !Ref AccessScopeType
+            Namespaces: !If [IsNamespaceScoped, !Ref AccessScopeNamespaces, !Ref "AWS::NoValue"]
+      Tags:
+        - Key: "cxm:managed-by"
+          Value: "cloud-ex-machina"
+        - Key: "cxm:prefix"
+          Value: !Ref Prefix
+
+Outputs:
+  ClusterName:
+    Description: Name of the EKS cluster
+    Value: !Ref ClusterName
+  PrincipalArn:
+    Description: ARN of the CXM IAM role granted access
+    Value: !Ref PrincipalArn
+  AccessScopeType:
+    Description: Access scope type configured for the access entry
+    Value: !Ref AccessScopeType

@@ -8,10 +8,6 @@ Parameters:
     Type: String
     Description: Account ID of the instance set up for this deployment
   # Accounts
-  LambdaBenchmarkAccountId:    # where CXM can modify and execute lambda
-    Type: String
-    Description: Where you give permission to CXM to execute lambda
-    Default: ''
   ManagementAccountId:
     Type: String
     Description: Management Account ID where Cost and Usage Report is located. CXM roles are created here.
@@ -35,71 +31,7 @@ Conditions:
   isManagementRegion: !Equals [!Ref AWS::Region, !Ref ManagementRegion]
   isManagementAccountAndRegion: !And [Condition: isManagementRegion, Condition: isManagementAccount]
 
-  isLambdaBenchmarkEnabledAccount: !Equals [!Ref LambdaBenchmarkAccountId, !Ref AWS::AccountId ]
-  isLambdaBenchmarkEnabledAccountAndRegion: !And [Condition: isLambdaBenchmarkEnabledAccount, Condition: isManagementAccount]
-
 Resources:
-
-  ################################################################
-  #
-  # Lambda Benchmarking (only in enabled account
-  #
-  ################################################################
-  LambdaBenchmarkingRole:
-    Type: AWS::IAM::Role
-    Condition: isLambdaBenchmarkEnabledAccountAndRegion
-    Properties:
-      RoleName: !Sub '${Prefix}-benchmark-runner${RoleSuffix}'
-      ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/AWSLambda_ReadOnlyAccess"    # Lambda managed policy
-        - "arn:aws:iam::aws:policy/service-role/AWSLambdaRole"  # Lambda managed policy
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                sts:ExternalId: !Sub '${CXMExternalId}'
-          - Effect: Allow
-            Action:
-              - sts:AssumeRole
-              - sts:TagSession
-            Principal:
-              AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
-            Condition:
-              StringEquals:
-                sts:ExternalId: !Sub '${CXMExternalId}'
-
-  BenchmarkingPolicy:
-    Type: AWS::IAM::Policy
-    Condition: isLambdaBenchmarkEnabledAccountAndRegion
-    DependsOn: LambdaBenchmarkingRole
-    Properties:
-      PolicyName: !Sub '${Prefix}-benchmark-runner${RoleSuffix}-policy'
-      Roles:
-        - !Ref LambdaBenchmarkingRole
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: LambdaBenchmarkingEnablement
-            Effect: Allow
-            Action:
-              - lambda:PublishVersion
-              - lambda:UpdateFunctionConfiguration
-              - lambda:CreateAlias
-              - lambda:UpdateAlias
-            Resource: "arn:aws:lambda:*:*:function:*"
-
-          - Sid: LambdaBenchmarkingGarbageCollection
-            Effect: Allow
-            Action:
-              - lambda:DeleteAlias
-              - lambda:DeleteFunction
-            Resource: "*"
-
 
   ################################################################
   #
@@ -290,9 +222,6 @@ Outputs:
   ManagementRegion:
     Description: Management region where roles will be created
     Value: !Ref ManagementRegion
-  LambdaBenchmarkAccountId:    # where CXM can modify and execute lambda
-    Description: Where you give permission to CXM to execute lambda
-    Value: !Ref LambdaBenchmarkAccountId
   ManagementAccountId:
     Description: Management Account ID where Cost and Usage Report is located. CXM roles are created here.
     Value: !Ref ManagementAccountId
@@ -307,12 +236,3 @@ Outputs:
     Value: !GetAtt CxmAssetCrawlerRole.RoleId
     Condition: isManagementRegion  # Only one role per account
 
-  # Lambda Benchmark
-  LambdaBenchmarkingRoleArn:
-    Description: ARN of the Lambda Benchmarking IAM Role
-    Value: !GetAtt LambdaBenchmarkingRole.Arn
-    Condition: isLambdaBenchmarkEnabledAccountAndRegion
-  LambdaBenchmarkingRoleId:
-    Description: Id of the Lambda Benchmarking IAM Role
-    Value: !GetAtt LambdaBenchmarkingRole.RoleId
-    Condition: isLambdaBenchmarkEnabledAccountAndRegion

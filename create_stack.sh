@@ -75,7 +75,7 @@ info "Creating root CloudFormation stack..."
 aws cloudformation create-stack \
   --stack-name CxmIntegrationStack-Main \
   --template-body file://cxm-integration-aws-root.yaml \
-  --parameters file://params-cxm-root-example.json \
+  --parameters file://params-cxm-root.json \
   --capabilities CAPABILITY_NAMED_IAM || error_exit "Failed to create root stack."
 
 info "Waiting for root stack creation to complete..."
@@ -90,7 +90,7 @@ info "Creating StackSet for sub-accounts..."
 aws cloudformation create-stack-set \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --template-body file://cxm-integration-aws-sub-account.yaml \
-  --parameters file://params-cxm-sub-accounts-example.json \
+  --parameters file://params-cxm-sub-accounts.json \
   --capabilities CAPABILITY_NAMED_IAM \
   --permission-model SERVICE_MANAGED \
   --auto-deployment "Enabled=true,RetainStacksOnAccountRemoval=false" || error_exit "Failed to create StackSet."
@@ -103,9 +103,8 @@ info "Creating StackSet instances for OUs: $TARGET_ORGANIZATIONAL_UNITS in regio
 aws cloudformation create-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --deployment-targets "OrganizationalUnitIds=${TARGET_ORGANIZATIONAL_UNITS}" \
-  --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5" \
   --regions ${TARGET_REGIONS} \
-  --operation-preferences "RegionConcurrencyType=PARALLEL" || error_exit "Failed to create StackSet instances."
+  --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5,RegionConcurrencyType=PARALLEL" || error_exit "Failed to create StackSet instances."
 
 
 success "StackSet instances created successfully."

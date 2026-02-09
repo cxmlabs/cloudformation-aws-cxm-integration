@@ -79,7 +79,7 @@ info "Updating root CloudFormation stack..."
 aws cloudformation update-stack \
   --stack-name CxmIntegrationStack-Main \
   --template-body file://cxm-integration-aws-root.yaml \
-  --parameters file://params-cxm-root-example.json \
+  --parameters file://params-cxm-root.json \
   --capabilities CAPABILITY_NAMED_IAM || warning "Failed to update root stack or nothing to update."
 
 info "Waiting for root stack update to complete..."
@@ -94,7 +94,7 @@ info "Updating StackSet for sub-accounts..."
 aws cloudformation update-stack-set \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --template-body file://cxm-integration-aws-sub-account.yaml \
-  --parameters file://params-cxm-sub-accounts-example.json \
+  --parameters file://params-cxm-sub-accounts.json \
   --capabilities CAPABILITY_NAMED_IAM \
   --permission-model SERVICE_MANAGED \
   --auto-deployment "Enabled=true,RetainStacksOnAccountRemoval=false" || error_exit "Failed to update StackSet."
@@ -108,9 +108,8 @@ info "Updating StackSet instances..."
 aws cloudformation update-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --deployment-targets "OrganizationalUnitIds=${TARGET_ORGANIZATIONAL_UNITS}" \
-  --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5" \
   --regions ${TARGET_REGIONS} \
-  --operation-preferences "RegionConcurrencyType=PARALLEL" || error_exit "Failed to update StackSet instances."
+  --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5,RegionConcurrencyType=PARALLEL" || error_exit "Failed to update StackSet instances."
 
 success "StackSet instances updated successfully."
 

@@ -5,9 +5,6 @@
   {"ParameterKey": "CXMExternalId",
   "ParameterValue": "my-cxm-external-id"},
 
-  {"ParameterKey": "LambdaBenchmarkAccountId",
-  "ParameterValue": "012345678911"},
-
   {"ParameterKey": "ManagementAccountId",
   "ParameterValue": "123456789101"},
 

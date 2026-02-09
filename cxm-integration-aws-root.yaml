@@ -249,9 +249,6 @@ Resources:
                 - "kms:Decrypt"
                 - "kms:GenerateDataKey"
               Resource: !Ref CostAndUsageReportS3BucketKmsKeyArn
-              Condition:
-                StringEquals:
-                  kms:EncryptionContext: "arn:aws:s3:::${CostAndUsageReportS3BucketName}"
             - !Ref AWS::NoValue
 
   ################################################################
@@ -366,7 +363,7 @@ Resources:
             - true
           requestParameters:
             roleName:
-              - "cxm*"
+              - wildcard: !Sub "*${Prefix}*"
       Targets:
         - Id: "SendToControlPlaneBus"
           Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/control-plane"
