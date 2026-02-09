@@ -157,11 +157,8 @@ Resources:
           - Sid: CostOptimizationHubReadOnlyAccess
             Effect: Allow
             Action:
-              - cost-optimization-hub:ListEnrollmentStatuses
-              - cost-optimization-hub:GetPreferences
-              - cost-optimization-hub:GetRecommendation
-              - cost-optimization-hub:ListRecommendations
-              - cost-optimization-hub:ListRecommendationSummaries
+              - cost-optimization-hub:List*
+              - cost-optimization-hub:Get*
             Resource: "*"
           - Sid: SSOReadOnlyAccess
             Effect: Allow

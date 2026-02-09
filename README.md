@@ -3,7 +3,95 @@
 This project consists in one cloudformation stack and one stackset to apply to your AWS cloud organization.
 It will allow CXM to access only the data it needs, and setup key notifications (CUR file creation, changes in organization) that drive CxM's platform.
 
-## How to
+## Templates Overview
+
+| Template | Type | Purpose |
+|----------|------|---------|
+| `cxm-integration-aws-root.yaml` | Stack | Deploys to the management account: organization crawler role, CUR reader role, and EventBridge notification rules |
+| `cxm-integration-aws-sub-account.yaml` | StackSet | Deploys to member accounts: inventory crawler role and optional Lambda benchmarking role |
+
+## Manual Deployment
+
+If you prefer to deploy manually via the AWS Console or CLI without using the provided scripts, follow these steps.
+
+### Prerequisites
+
+1. Copy and customize the parameter files:
+   ```bash
+   cp params-cxm-root-example.json params-cxm-root.json
+   cp params-cxm-sub-accounts-example.json params-cxm-sub-accounts.json
+   ```
+2. Update both files with the values provided by CXM and your AWS configuration.
+
+### Step 1: Deploy the Root Stack (Management Account)
+
+Deploy `cxm-integration-aws-root.yaml` as a CloudFormation **Stack** in your management account.
+
+**Via AWS Console:**
+1. Navigate to CloudFormation > Stacks > Create stack
+2. Upload `cxm-integration-aws-root.yaml`
+3. Enter the parameters from `params-cxm-root.json`
+4. Name the stack (e.g., `CxmIntegrationStack-Main`)
+5. Acknowledge IAM resource creation and create the stack
+
+**Via AWS CLI:**
+```bash
+aws cloudformation create-stack \
+  --stack-name CxmIntegrationStack-Main \
+  --template-body file://cxm-integration-aws-root.yaml \
+  --parameters file://params-cxm-root.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+```
+
+### Step 2: Deploy the Sub-Accounts StackSet
+
+Deploy `cxm-integration-aws-sub-account.yaml` as a CloudFormation **StackSet** to your organization's member accounts.
+
+**Via AWS Console:**
+1. Navigate to CloudFormation > StackSets > Create StackSet
+2. Choose "Service-managed permissions" (recommended for Organizations)
+3. Upload `cxm-integration-aws-sub-account.yaml`
+4. Enter the parameters from `params-cxm-sub-accounts.json`
+5. Name the StackSet (e.g., `CxmIntegrationStack-SubAccounts`)
+6. Select deployment targets:
+   - Choose "Deploy to organizational units (OUs)" or specific accounts
+   - Select target regions (all regions where you have resources)
+7. Configure deployment options (concurrent accounts, failure tolerance)
+8. Acknowledge IAM resource creation and create the StackSet
+
+**Via AWS CLI:**
+```bash
+# Create the StackSet
+aws cloudformation create-stack-set \
+  --stack-set-name CxmIntegrationStack-SubAccounts \
+  --template-body file://cxm-integration-aws-sub-account.yaml \
+  --parameters file://params-cxm-sub-accounts.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --permission-model SERVICE_MANAGED \
+  --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
+  --region us-east-1
+
+# Create stack instances in target OUs and regions
+aws cloudformation create-stack-instances \
+  --stack-set-name CxmIntegrationStack-SubAccounts \
+  --deployment-targets OrganizationalUnitIds=ou-xxxx-xxxxxxxx \
+  --regions us-east-1 us-east-2 eu-west-1 \
+  --operation-preferences FailureTolerancePercentage=100,MaxConcurrentPercentage=50 \
+  --region us-east-1
+```
+
+### Step 3: Verify and Share Outputs
+
+1. Check the root stack outputs in the CloudFormation console
+2. Verify StackSet instances are deployed successfully across accounts
+3. Share the stack outputs with CXM to complete the integration
+
+---
+
+## Scripted Deployment
+
+For automated deployment using the provided scripts, follow these steps.
 
 1. Update the `params-cxm-root-example.json` & `params-cxm-root-sub-accounts-example.json` file with the parameter values CXM provided and your data
 2. Select the target OUs and regions in your AWS organizations. If you don't select any, the script will default to the root OU and all currently active regions in your root account.
