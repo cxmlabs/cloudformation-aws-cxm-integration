@@ -103,9 +103,8 @@ info "Creating StackSet instances for OUs: $TARGET_ORGANIZATIONAL_UNITS in regio
 aws cloudformation create-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --deployment-targets "OrganizationalUnitIds=${TARGET_ORGANIZATIONAL_UNITS}" \
-  --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5" \
   --regions ${TARGET_REGIONS} \
-  --operation-preferences "RegionConcurrencyType=PARALLEL" || error_exit "Failed to create StackSet instances."
+  --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5,RegionConcurrencyType=PARALLEL" || error_exit "Failed to create StackSet instances."
 
 
 success "StackSet instances created successfully."

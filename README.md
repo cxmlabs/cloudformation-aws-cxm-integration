@@ -1,8 +1,8 @@
-# Cloud ex Machina - AWS Integration using CloudFormation
+# Cloud ex Machina — AWS Integration (CloudFormation)
 
-This project provides CloudFormation templates to integrate your AWS Organization with the CXM platform. It grants CXM the access it needs to optimize your cloud infrastructure, and sets up EventBridge notifications that drive CXM's platform.
+This project deploys CloudFormation stacks that grant CXM cross-account read access to your AWS Organization and set up EventBridge notifications that drive CXM's optimization platform.
 
-## Templates Overview
+## Templates
 
 | Template | Type | Purpose |
 |----------|------|---------|
@@ -10,31 +10,63 @@ This project provides CloudFormation templates to integrate your AWS Organizatio
 | `cxm-integration-aws-sub-account.yaml` | StackSet | Deploys to member accounts: asset crawler role and EventBridge CloudFormation notifier |
 | `cxm-integration-aws-eks.yaml` | Stack | Optional — Grants CXM read-only access to an EKS cluster via Access Entries (deploy once per cluster) |
 
-## Manual Deployment
+## Prerequisites
 
-If you prefer to deploy manually via the AWS Console or CLI without using the provided scripts, follow these steps.
+- **AWS CLI v2** installed and configured
+- **Admin access** to the AWS Organizations management account
+- **Values provided by CXM**: External ID, CXM Account ID, and CUR S3 bucket name
 
-### Prerequisites
+## Parameters
 
-1. Copy and customize the parameter files:
-   ```bash
-   cp params-cxm-root-example.json params-cxm-root.json
-   cp params-cxm-sub-accounts-example.json params-cxm-sub-accounts.json
-   ```
-2. Update both files with the values provided by CXM and your AWS configuration.
+### Root Stack (`params-cxm-root.json`)
 
-### Step 1: Deploy the Root Stack (Management Account)
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `CXMExternalId` | Yes | — | External ID provided by CXM for this deployment |
+| `CXMCustomerAccountId` | Yes | — | CXM account ID for this deployment |
+| `ManagementAccountId` | Yes | — | Your AWS management account ID |
+| `CostAndUsageReportS3BucketName` | Yes | — | S3 bucket storing your CUR data |
+| `CostAndUsageReportS3BucketKmsKeyArn` | No | `""` | KMS key ARN if your CUR bucket is encrypted |
+| `CostAndUsageBucketRegion` | No | `us-east-1` | Region of the CUR S3 bucket |
+| `ManagementRegion` | No | `us-east-1` | Region where IAM roles are created |
+| `Prefix` | No | `cxm` | Namespace prefix for resource names |
+| `RoleSuffix` | No | `""` | Optional suffix appended to IAM role names |
 
-Deploy `cxm-integration-aws-root.yaml` as a CloudFormation **Stack** in your management account.
+### Sub-Account StackSet (`params-cxm-sub-accounts.json`)
 
-**Via AWS Console:**
-1. Navigate to CloudFormation > Stacks > Create stack
-2. Upload `cxm-integration-aws-root.yaml`
-3. Enter the parameters from `params-cxm-root.json`
-4. Name the stack (e.g., `CxmIntegrationStack-Main`)
-5. Acknowledge IAM resource creation and create the stack
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `CXMExternalId` | Yes | — | External ID provided by CXM (same as root) |
+| `CXMCustomerAccountId` | Yes | — | CXM account ID (same as root) |
+| `ManagementAccountId` | Yes | — | Your AWS management account ID |
+| `ManagementRegion` | No | `us-east-1` | Region where roles are created |
+| `Prefix` | No | `cxm` | Namespace prefix for resource names |
+| `RoleSuffix` | No | `""` | Optional suffix appended to IAM role names |
 
-**Via AWS CLI:**
+### EKS Stack (inline parameters)
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `ClusterName` | Yes | — | Name of the EKS cluster |
+| `PrincipalArn` | Yes | — | ARN of the CXM IAM role (from root stack outputs) |
+| `AccessScopeType` | No | `cluster` | `cluster` for full access, `namespace` to restrict |
+| `AccessScopeNamespaces` | No | `""` | Comma-separated namespaces (only when type is `namespace`) |
+| `KubernetesGroups` | No | `""` | Comma-separated Kubernetes groups for the access entry |
+| `Prefix` | No | `cxm` | Namespace prefix for resource names |
+
+## Deployment
+
+### 1. Configure Parameters
+
+```bash
+cp params-cxm-root-example.json params-cxm-root.json
+cp params-cxm-sub-accounts-example.json params-cxm-sub-accounts.json
+```
+
+Edit both files and fill in the values provided by CXM.
+
+### 2. Deploy the Root Stack
+
 ```bash
 aws cloudformation create-stack \
   --stack-name CxmIntegrationStack-Main \
@@ -42,25 +74,14 @@ aws cloudformation create-stack \
   --parameters file://params-cxm-root.json \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
+
+aws cloudformation wait stack-create-complete \
+  --stack-name CxmIntegrationStack-Main \
+  --region us-east-1
 ```
 
-### Step 2: Deploy the Sub-Accounts StackSet
+### 3. Deploy the Sub-Accounts StackSet
 
-Deploy `cxm-integration-aws-sub-account.yaml` as a CloudFormation **StackSet** to your organization's member accounts.
-
-**Via AWS Console:**
-1. Navigate to CloudFormation > StackSets > Create StackSet
-2. Choose "Service-managed permissions" (recommended for Organizations)
-3. Upload `cxm-integration-aws-sub-account.yaml`
-4. Enter the parameters from `params-cxm-sub-accounts.json`
-5. Name the StackSet (e.g., `CxmIntegrationStack-SubAccounts`)
-6. Select deployment targets:
-   - Choose "Deploy to organizational units (OUs)" or specific accounts
-   - Select target regions (all regions where you have resources)
-7. Configure deployment options (concurrent accounts, failure tolerance)
-8. Acknowledge IAM resource creation and create the StackSet
-
-**Via AWS CLI:**
 ```bash
 # Create the StackSet
 aws cloudformation create-stack-set \
@@ -72,28 +93,21 @@ aws cloudformation create-stack-set \
   --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
   --region us-east-1
 
-# Create stack instances in target OUs and regions
+# Deploy instances to your OUs and regions
 aws cloudformation create-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
-  --deployment-targets OrganizationalUnitIds=ou-xxxx-xxxxxxxx \
+  --deployment-targets OrganizationalUnitIds='["ou-xxxx-xxxxxxxx"]' \
   --regions us-east-1 us-east-2 eu-west-1 \
   --operation-preferences FailureTolerancePercentage=100,MaxConcurrentPercentage=50 \
   --region us-east-1
 ```
 
-### Step 3: Deploy EKS Access (Optional)
+Auto-deployment is enabled — new accounts joining the targeted OUs will receive the stack automatically.
 
-If you run EKS clusters and want CXM to have read-only Kubernetes visibility, deploy the `cxm-integration-aws-eks.yaml` template **once per cluster**.
+### 4. Deploy EKS Access (Optional)
 
-This template uses the EKS Access Entry API (available on clusters running Platform version `eks.14+` or created after October 2023). For older clusters using the `aws-auth` ConfigMap, you must first upgrade the cluster's authentication mode:
+If you run EKS clusters and want CXM to have read-only Kubernetes visibility, deploy once per cluster:
 
-```bash
-aws eks update-cluster-config \
-  --name <CLUSTER_NAME> \
-  --access-config authenticationMode=API_AND_CONFIG_MAP
-```
-
-**Via AWS CLI:**
 ```bash
 aws cloudformation create-stack \
   --stack-name CxmEksAccess-<CLUSTER_NAME> \
@@ -104,9 +118,10 @@ aws cloudformation create-stack \
   --region <CLUSTER_REGION>
 ```
 
-Where `<CXM_ROLE_ARN>` is the `CxmOrganizationCrawlerRoleArn` or `CxmAssetCrawlerRoleArn` from the stack outputs.
+Where `<CXM_ROLE_ARN>` is the `CxmOrganizationCrawlerRoleArn` or `CxmAssetCrawlerRoleArn` from the root stack outputs.
 
 To restrict access to specific namespaces:
+
 ```bash
 aws cloudformation create-stack \
   --stack-name CxmEksAccess-<CLUSTER_NAME> \
@@ -119,42 +134,128 @@ aws cloudformation create-stack \
   --region <CLUSTER_REGION>
 ```
 
-### Step 4: Verify and Share Outputs
+> **Legacy clusters:** Clusters created before October 2023 (platform version < `eks.14`) use the `aws-auth` ConfigMap. You must first enable the Access Entry API:
+> ```bash
+> aws eks update-cluster-config \
+>   --name <CLUSTER_NAME> \
+>   --access-config authenticationMode=API_AND_CONFIG_MAP
+> ```
 
-1. Check the root stack outputs in the CloudFormation console
-2. Verify StackSet instances are deployed successfully across accounts
-3. Share the stack outputs with CXM to complete the integration
+### 5. Verify & Share Outputs
 
----
+Retrieve the root stack outputs and share them with CXM to complete the integration:
 
-## Scripted Deployment
+```bash
+aws cloudformation describe-stacks \
+  --stack-name CxmIntegrationStack-Main \
+  --query "Stacks[0].Outputs" \
+  --output json \
+  --region us-east-1
+```
 
-For automated deployment using the provided scripts, follow these steps.
+## Updating
 
-1. Copy and customize the parameter files:
-   ```bash
-   cp params-cxm-root-example.json params-cxm-root.json
-   cp params-cxm-sub-accounts-example.json params-cxm-sub-accounts.json
-   ```
-2. Update both files with the values provided by CXM and your AWS configuration.
-3. Select the target OUs and regions in your AWS organizations. If you don't select any, the script will default to the root OU and all currently active regions in your root account.
-4. Login as an admin user of the management account of the organization.
-   ```bash
-   AWS_PROFILE=my-root aws sso login
-   ```
-5. Connect to AWS in your terminal, then launch the following command:
-   ```
-   AWS_PROFILE=my-root AWS_REGION=us-east-1 ./create_stack.sh --target-organizational-units "unit-1 unit-2" --target-regions "us-east-1 us-east-2"
-   ```
-   Alternatively you can use the script without any arguments to use default values:
-   ```
-   AWS_PROFILE=my-root AWS_REGION=us-east-1 ./create_stack.sh
-   ```
-6. Check the status of the `CxmIntegrationStack-Main` CloudFormation Stack on AWS console.
-7. Check the status of the `CxmIntegrationStack-SubAccounts` CloudFormation StackSet on AWS console.
-8. Confirm with CXM by dropping us a line.
-9. If needed, you can update the stack with
-   ```
-   AWS_PROFILE=my-root AWS_REGION=us-east-1 ./update_stack.sh --target-organizational-units "unit-1 unit-2" --target-regions "us-east-1 us-east-2"
-   ```
-10. Send CXM the JSON outputs displayed on your terminal.
+When CXM provides updated templates or you need to change parameters:
+
+```bash
+# Update the root stack
+aws cloudformation update-stack \
+  --stack-name CxmIntegrationStack-Main \
+  --template-body file://cxm-integration-aws-root.yaml \
+  --parameters file://params-cxm-root.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+
+aws cloudformation wait stack-update-complete \
+  --stack-name CxmIntegrationStack-Main \
+  --region us-east-1
+
+# Update the StackSet
+aws cloudformation update-stack-set \
+  --stack-set-name CxmIntegrationStack-SubAccounts \
+  --template-body file://cxm-integration-aws-sub-account.yaml \
+  --parameters file://params-cxm-sub-accounts.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --permission-model SERVICE_MANAGED \
+  --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
+  --region us-east-1
+
+# Update existing instances (after the StackSet update finishes)
+aws cloudformation update-stack-instances \
+  --stack-set-name CxmIntegrationStack-SubAccounts \
+  --deployment-targets OrganizationalUnitIds='["ou-xxxx-xxxxxxxx"]' \
+  --regions us-east-1 us-east-2 eu-west-1 \
+  --operation-preferences FailureTolerancePercentage=100,MaxConcurrentPercentage=50 \
+  --region us-east-1
+```
+
+## Uninstalling
+
+Remove resources in reverse order — instances first, then the StackSet, then the root stack:
+
+```bash
+# Delete all StackSet instances
+aws cloudformation delete-stack-instances \
+  --stack-set-name CxmIntegrationStack-SubAccounts \
+  --deployment-targets OrganizationalUnitIds='["ou-xxxx-xxxxxxxx"]' \
+  --regions us-east-1 us-east-2 eu-west-1 \
+  --no-retain-stacks \
+  --region us-east-1
+
+# Wait for instances to be deleted, then delete the StackSet
+aws cloudformation delete-stack-set \
+  --stack-set-name CxmIntegrationStack-SubAccounts \
+  --region us-east-1
+
+# Delete the root stack
+aws cloudformation delete-stack \
+  --stack-name CxmIntegrationStack-Main \
+  --region us-east-1
+
+aws cloudformation wait stack-delete-complete \
+  --stack-name CxmIntegrationStack-Main \
+  --region us-east-1
+```
+
+If you deployed EKS stacks, delete those separately:
+
+```bash
+aws cloudformation delete-stack \
+  --stack-name CxmEksAccess-<CLUSTER_NAME> \
+  --region <CLUSTER_REGION>
+```
+
+## Helper Scripts
+
+Wrapper scripts are provided for convenience. They accept `--target-organizational-units` and `--target-regions` flags, defaulting to the root OU and all active regions when omitted.
+
+| Script | Action |
+|--------|--------|
+| `create_stack.sh` | Creates the root stack, StackSet, and instances |
+| `update_stack.sh` | Updates the root stack, StackSet, and instances |
+| `delete_stack.sh` | Deletes instances, StackSet, and root stack |
+
+Usage:
+
+```bash
+# Login to your management account
+AWS_PROFILE=my-root aws sso login
+
+# Create (defaults to root OU + all regions)
+AWS_PROFILE=my-root AWS_REGION=us-east-1 ./create_stack.sh
+
+# Or specify targets explicitly
+AWS_PROFILE=my-root AWS_REGION=us-east-1 ./create_stack.sh \
+  --target-organizational-units "ou-xxxx-xxxxxxxx" \
+  --target-regions "us-east-1 us-east-2 eu-west-1"
+
+# Update
+AWS_PROFILE=my-root AWS_REGION=us-east-1 ./update_stack.sh \
+  --target-organizational-units "ou-xxxx-xxxxxxxx" \
+  --target-regions "us-east-1 us-east-2 eu-west-1"
+
+# Delete
+AWS_PROFILE=my-root AWS_REGION=us-east-1 ./delete_stack.sh \
+  --target-organizational-units "ou-xxxx-xxxxxxxx" \
+  --target-regions "us-east-1 us-east-2 eu-west-1"
+```

@@ -108,9 +108,8 @@ info "Updating StackSet instances..."
 aws cloudformation update-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --deployment-targets "OrganizationalUnitIds=${TARGET_ORGANIZATIONAL_UNITS}" \
-  --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5" \
   --regions ${TARGET_REGIONS} \
-  --operation-preferences "RegionConcurrencyType=PARALLEL" || error_exit "Failed to update StackSet instances."
+  --operation-preferences "FailureToleranceCount=0,MaxConcurrentCount=5,RegionConcurrencyType=PARALLEL" || error_exit "Failed to update StackSet instances."
 
 success "StackSet instances updated successfully."
 
