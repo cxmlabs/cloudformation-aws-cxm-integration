@@ -1,14 +1,14 @@
 [
   {"ParameterKey": "CXMCustomerAccountId",
-  "ParameterValue": "112233445566"},
+  "ParameterValue": "156041419558"},
 
   {"ParameterKey": "CXMExternalId",
-  "ParameterValue": "my-cxm-external-id"},
+  "ParameterValue": "cxm:cava-staging"},
 
   {"ParameterKey": "ManagementAccountId",
-  "ParameterValue": "123456789101"},
+  "ParameterValue": "131309865376"},
 
   {"ParameterKey": "RoleSuffix",
-  "ParameterValue": ""}
+  "ParameterValue": "-cava-cfn"}
 
 ]
