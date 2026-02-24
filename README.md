@@ -25,7 +25,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `CXMExternalId` | Yes | — | External ID provided by CXM for this deployment |
 | `CXMCustomerAccountId` | Yes | — | CXM account ID for this deployment |
 | `ManagementAccountId` | Yes | — | Your AWS management account ID |
-| `CostAndUsageReportS3BucketName` | Yes | — | S3 bucket storing your CUR data |
+| `CostAndUsageReportS3BucketName` | Yes | — | S3 bucket name storing your CUR data (bucket name only, not the ARN — e.g. `my-cur-bucket`) |
 | `CostAndUsageReportS3BucketKmsKeyArn` | No | `""` | KMS key ARN if your CUR bucket is encrypted |
 | `CostAndUsageBucketRegion` | No | `us-east-1` | Region of the CUR S3 bucket |
 | `ManagementRegion` | No | `us-east-1` | Region where IAM roles are created |

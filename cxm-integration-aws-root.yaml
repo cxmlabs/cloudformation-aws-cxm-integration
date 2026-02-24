@@ -14,7 +14,9 @@ Parameters:
   # CUR Bucket
   CostAndUsageReportS3BucketName:
     Type: String
-    Description: Name of the S3 bucket used to store CUR data
+    Description: Name of the S3 bucket used to store CUR data (bucket name only, not the ARN — e.g. "my-cur-bucket", not "arn:aws:s3:::my-cur-bucket")
+    AllowedPattern: '^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$'
+    ConstraintDescription: Must be an S3 bucket name (not an ARN). Example: my-cur-bucket
   CostAndUsageReportS3BucketKmsKeyArn:
     Type: String
     Default: ''
@@ -445,3 +447,25 @@ Outputs:
   CostAndUsageBucketRegion:
     Description: Cost and Usage Bucket region
     Value: !Ref CostAndUsageBucketRegion
+
+  # Verification outputs
+  CxmNotificationRoleArn:
+    Description: ARN of the Notification IAM Role
+    Value: !GetAtt CxmNotificationRole.Arn
+    Condition: isManagementAccountAndRegion
+  CostAndUsageReportS3BucketArn:
+    Description: Computed S3 bucket ARN used in IAM policies
+    Value: !Sub 'arn:aws:s3:::${CostAndUsageReportS3BucketName}'
+    Condition: isCostAndUsageBucketAccountAndRegion
+  CXMCustomerAccountId:
+    Description: CXM account ID trusted in role assume policies
+    Value: !Ref CXMCustomerAccountId
+  ManagementAccountId:
+    Description: Management account ID where the stack is deployed
+    Value: !Ref ManagementAccountId
+  DeployedAccountId:
+    Description: Actual AWS account ID where this stack is running
+    Value: !Ref AWS::AccountId
+  DeployedRegion:
+    Description: Actual AWS region where this stack is running
+    Value: !Ref AWS::Region
