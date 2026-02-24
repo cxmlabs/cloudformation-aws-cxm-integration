@@ -3,14 +3,18 @@ Parameters:
   # CXM Accounts
   CXMExternalId:
     Type: String
-    Description: External ID created for this deployment
+    Description: External ID provided by CXM for this deployment
   CXMCustomerAccountId:
     Type: String
-    Description: Account ID of the instance set up for this deployment
+    Description: 12-digit CXM AWS account ID provided by CXM (used to authorize cross-account access)
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: Must be a 12-digit AWS account ID
   # Accounts
   ManagementAccountId:
     Type: String
-    Description: Management Account ID where Cost and Usage Report is located. CXM roles are created here.
+    Description: Your 12-digit AWS Organizations management account ID where CXM roles are created
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: Must be a 12-digit AWS account ID
   # CUR Bucket
   CostAndUsageReportS3BucketName:
     Type: String
@@ -20,7 +24,9 @@ Parameters:
   CostAndUsageReportS3BucketKmsKeyArn:
     Type: String
     Default: ''
-    Description: Optional - ARN of the KMS Key used to encrypt CUR data.
+    Description: Optional — ARN of the KMS key used to encrypt CUR data (e.g. "arn:aws:kms:us-east-1:123456789012:key/abc-def"). Leave empty if not encrypted with a custom key.
+    AllowedPattern: '^(arn:aws:kms:[a-z0-9-]+:\d{12}:key/[a-f0-9-]+)?$'
+    ConstraintDescription: Must be a valid KMS key ARN or empty
   # Regions
   CostAndUsageBucketRegion:  # where the S3 for CUR is
     Type: String
