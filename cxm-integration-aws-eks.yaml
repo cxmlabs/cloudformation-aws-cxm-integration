@@ -10,6 +10,8 @@ Parameters:
   PrincipalArn:
     Type: String
     Description: ARN of the CXM IAM role (organization-crawler or asset-crawler from stack outputs)
+    AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
+    ConstraintDescription: Must be a valid IAM role ARN (e.g. arn:aws:iam::123456789012:role/cxm-organization-crawler)
   AccessScopeType:
     Type: String
     Default: cluster

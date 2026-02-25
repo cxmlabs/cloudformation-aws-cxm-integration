@@ -22,11 +22,11 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `CXMExternalId` | Yes | — | External ID provided by CXM for this deployment |
-| `CXMCustomerAccountId` | Yes | — | CXM account ID for this deployment |
-| `ManagementAccountId` | Yes | — | Your AWS management account ID |
-| `CostAndUsageReportS3BucketName` | Yes | — | S3 bucket storing your CUR data |
-| `CostAndUsageReportS3BucketKmsKeyArn` | No | `""` | KMS key ARN if your CUR bucket is encrypted |
+| `CXMExternalId` | Yes | — | External ID provided by CXM |
+| `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM |
+| `ManagementAccountId` | Yes | — | Your 12-digit AWS Organizations management account ID (where CXM roles are created) |
+| `CostAndUsageReportS3BucketName` | Yes | — | S3 bucket name storing your CUR data (bucket name only, not the ARN — e.g. `my-cur-bucket`) |
+| `CostAndUsageReportS3BucketKmsKeyArn` | No | `""` | KMS key ARN if your CUR bucket is encrypted (e.g. `arn:aws:kms:us-east-1:123456789012:key/...`) |
 | `CostAndUsageBucketRegion` | No | `us-east-1` | Region of the CUR S3 bucket |
 | `ManagementRegion` | No | `us-east-1` | Region where IAM roles are created |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
@@ -34,11 +34,13 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 
 ### Sub-Account StackSet (`params-cxm-sub-accounts.json`)
 
+> **Important:** This StackSet must be deployed to all member accounts in your organization for CXM to have visibility into their resources. Without it, CXM can only see assets in the management account.
+
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `CXMExternalId` | Yes | — | External ID provided by CXM (same as root) |
-| `CXMCustomerAccountId` | Yes | — | CXM account ID (same as root) |
-| `ManagementAccountId` | Yes | — | Your AWS management account ID |
+| `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
+| `ManagementAccountId` | Yes | — | Your 12-digit AWS Organizations management account ID |
 | `ManagementRegion` | No | `us-east-1` | Region where roles are created |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
 | `RoleSuffix` | No | `""` | Optional suffix appended to IAM role names |
@@ -48,7 +50,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `ClusterName` | Yes | — | Name of the EKS cluster |
-| `PrincipalArn` | Yes | — | ARN of the CXM IAM role (from root stack outputs) |
+| `PrincipalArn` | Yes | — | IAM role ARN of the CXM role (from root stack outputs, e.g. `arn:aws:iam::123456789012:role/cxm-organization-crawler`) |
 | `AccessScopeType` | No | `cluster` | `cluster` for full access, `namespace` to restrict |
 | `AccessScopeNamespaces` | No | `""` | Comma-separated namespaces (only when type is `namespace`) |
 | `KubernetesGroups` | No | `""` | Comma-separated Kubernetes groups for the access entry |

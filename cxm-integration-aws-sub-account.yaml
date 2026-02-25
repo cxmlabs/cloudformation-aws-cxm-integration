@@ -3,14 +3,18 @@ Parameters:
   # CXM Accounts
   CXMExternalId:
     Type: String
-    Description: External ID created for this deployment
+    Description: External ID provided by CXM for this deployment
   CXMCustomerAccountId:
     Type: String
-    Description: Account ID of the instance set up for this deployment
+    Description: 12-digit CXM AWS account ID provided by CXM (used to authorize cross-account access)
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: Must be a 12-digit AWS account ID
   # Accounts
   ManagementAccountId:
     Type: String
-    Description: Management Account ID where Cost and Usage Report is located. CXM roles are created here.
+    Description: Your 12-digit AWS Organizations management account ID
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: Must be a 12-digit AWS account ID
   # Regions
   ManagementRegion:  # where the S3 for CUR is
     Type: String
@@ -223,7 +227,7 @@ Outputs:
     Description: Management region where roles will be created
     Value: !Ref ManagementRegion
   ManagementAccountId:
-    Description: Management Account ID where Cost and Usage Report is located. CXM roles are created here.
+    Description: AWS Organizations management account ID
     Value: !Ref ManagementAccountId
 
   # Asset crawler
@@ -235,4 +239,15 @@ Outputs:
     Description: Id of the Asset Crawler IAM Role
     Value: !GetAtt CxmAssetCrawlerRole.RoleId
     Condition: isManagementRegion  # Only one role per account
+
+  # Verification outputs
+  CXMCustomerAccountId:
+    Description: CXM account ID trusted in role assume policies
+    Value: !Ref CXMCustomerAccountId
+  DeployedAccountId:
+    Description: Actual AWS account ID where this stack is running
+    Value: !Ref AWS::AccountId
+  DeployedRegion:
+    Description: Actual AWS region where this stack is running
+    Value: !Ref AWS::Region
 
