@@ -88,7 +88,6 @@ Resources:
                 sts:ExternalId: !Sub '${CXMExternalId}'
   CxmOrganizationReadOnlyPolicy:
     Type: AWS::IAM::Policy
-    DependsOn: CxmOrganizationCrawlerRole
     Condition: isManagementAccountAndRegion  # Only in management account and region
     Properties:
       PolicyName: !Sub '${Prefix}-organization-crawler${RoleSuffix}-readonly-policy'
@@ -233,7 +232,6 @@ Resources:
                 sts:ExternalId: !Sub '${CXMExternalId}'
   CxmCostAndUsageReaderPolicy:
     Type: AWS::IAM::Policy
-    DependsOn: CxmCostAndUsageReaderRole
     Condition: isCostAndUsageBucketAccountAndRegion  # Only in management account and region
     Properties:
       PolicyName: !Sub '${Prefix}-cur-reader${RoleSuffix}-policy'
@@ -279,7 +277,6 @@ Resources:
 
   CxmNotificationRolePolicy:
     Type: AWS::IAM::Policy
-    DependsOn: CxmNotificationRole
     Condition: isManagementAccountAndRegion  # Only in management account and region
     Properties:
       PolicyName: !Sub "${Prefix}-cur-notification-data-plane${RoleSuffix}-policy"
@@ -301,7 +298,6 @@ Resources:
   ################################################################
   CxmCURBucketEventRule:
     Type: AWS::Events::Rule
-    DependsOn: CxmNotificationRole
     Condition: isManagementAccountAndRegion  # Only in management account and region
     Properties:
       Name: !Sub "${Prefix}-s3-bucket-change-notifier${RoleSuffix}"
@@ -329,7 +325,6 @@ Resources:
   ################################################################
   CxmOrganizationChangesEventRule:
     Type: AWS::Events::Rule
-    DependsOn: CxmNotificationRole
     Condition: isManagementAccountAndRegion  # Only in management account and region
     Properties:
       Name: !Sub "${Prefix}-organization-changes${RoleSuffix}"
@@ -353,7 +348,6 @@ Resources:
 
   CxmOrganizationAccessEventRule:
     Type: AWS::Events::Rule
-    DependsOn: CxmNotificationRole
     Condition: isManagementAccountAndRegion  # Only in management account and region
     Properties:
       Name: !Sub "${Prefix}-organization-access${RoleSuffix}"
@@ -379,7 +373,6 @@ Resources:
 
   CxmOrganizationCloudFormationRule:
     Type: AWS::Events::Rule
-    DependsOn: CxmNotificationRole
     Condition: isManagementAccountAndRegion  # Only in management account and region
     Properties:
       Name: !Sub "${Prefix}-organization-cloudformation${RoleSuffix}"
