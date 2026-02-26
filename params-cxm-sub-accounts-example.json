@@ -6,9 +6,6 @@
   "ParameterValue": "my-cxm-external-id"},
 
   {"ParameterKey": "ManagementAccountId",
-  "ParameterValue": "123456789101"},
-
-  {"ParameterKey": "RoleSuffix",
-  "ParameterValue": ""}
+  "ParameterValue": "123456789101"}
 
 ]

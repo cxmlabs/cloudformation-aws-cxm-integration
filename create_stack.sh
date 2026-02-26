@@ -8,6 +8,10 @@ error_exit() {
   exit 1
 }
 
+warning() {
+  echo "⭕ WARNING: $1" >&2
+}
+
 info() {
   echo "ℹ️ INFO: $1"
 }
@@ -83,6 +87,22 @@ aws cloudformation wait stack-create-complete \
   --stack-name CxmIntegrationStack-Main || error_exit "Root stack creation did not complete successfully."
 
 success "Root stack created successfully."
+
+# Highlight diagnostic outputs
+info "Checking deployment status..."
+CUR_CREATED=$(aws cloudformation describe-stacks \
+  --stack-name CxmIntegrationStack-Main \
+  --query "Stacks[0].Outputs[?OutputKey=='CURReaderCreated'].OutputValue" \
+  --output text) || true
+RESOURCES=$(aws cloudformation describe-stacks \
+  --stack-name CxmIntegrationStack-Main \
+  --query "Stacks[0].Outputs[?OutputKey=='ResourcesCreated'].OutputValue" \
+  --output text) || true
+info "CUR Reader Created: $CUR_CREATED"
+info "Resources Created: $RESOURCES"
+if [[ "$CUR_CREATED" == NO* ]]; then
+  warning "CUR Reader was NOT created. Redeploy this stack to the CUR bucket region."
+fi
 
 # --------- Create Stack Set ---------
 info "Creating StackSet for sub-accounts..."
