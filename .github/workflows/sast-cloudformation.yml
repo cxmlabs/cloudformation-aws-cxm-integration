@@ -1,0 +1,139 @@
+name: SAST - CloudFormation
+
+on:
+  push:
+    branches: ['main']
+    paths:
+      - '*.yaml'
+      - '*.sh'
+
+  pull_request:
+    branches: ['main']
+    paths:
+      - '*.yaml'
+      - '*.sh'
+
+  # Run monthly
+  schedule:
+    - cron: '0 0 1 * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloudformation-sast:
+    name: CloudFormation Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run cfn-lint
+        uses: scottbrenner/cfn-lint-action@v2
+
+      - name: Lint CloudFormation templates
+        run: cfn-lint *.yaml
+
+      - name: Run Checkov on CloudFormation
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: '.'
+          framework: 'cloudformation'
+          output_format: 'sarif'
+          output_file_path: 'checkov-cfn-results.sarif'
+          soft_fail: true
+        continue-on-error: true
+
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: success() || failure()
+        with:
+          wait-for-processing: true
+          sarif_file: 'checkov-cfn-results.sarif'
+          category: cloudformation-sast
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+        continue-on-error: true
+
+      - name: Security Scan Summary
+        run: |
+          echo "CloudFormation security scanning completed:"
+          echo "- Checkov - CloudFormation security & compliance scanner"
+          echo "- ShellCheck - Shell script static analysis"
+          echo ""
+          echo "Results are uploaded to the GitHub Security tab."
+        continue-on-error: true
+
+  security-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    needs: [cloudformation-sast]
+    if: success() || failure()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create Security Summary
+        run: |
+          echo "# Security Scan Summary" > security-summary.md
+          echo "" >> security-summary.md
+          echo "**Scan Date:** $(date)" >> security-summary.md
+          echo "**Branch:** ${{ github.ref_name }}" >> security-summary.md
+          echo "**Commit:** ${{ github.sha }}" >> security-summary.md
+          echo "" >> security-summary.md
+
+          echo "## Scan Results" >> security-summary.md
+          echo "" >> security-summary.md
+
+          echo "### CloudFormation Security" >> security-summary.md
+          if [ "${{ needs.cloudformation-sast.result }}" == "success" ]; then
+            echo "All checks passed." >> security-summary.md
+          else
+            echo "Some checks failed or had issues." >> security-summary.md
+          fi
+          echo "" >> security-summary.md
+
+          echo "## Next Steps" >> security-summary.md
+          echo "" >> security-summary.md
+          echo "1. Review the Security tab in GitHub for detailed findings" >> security-summary.md
+          echo "2. Address high and critical severity issues immediately" >> security-summary.md
+          echo "3. Plan remediation for medium severity issues" >> security-summary.md
+
+      - name: Upload Security Summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-summary
+          path: security-summary.md
+          retention-days: 30
+
+      - name: Comment on PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('security-summary.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });

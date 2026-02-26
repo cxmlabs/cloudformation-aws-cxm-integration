@@ -31,9 +31,7 @@ Parameters:
     Description: Role name suffix
 
 Conditions:
-  isManagementAccount: !Equals [!Ref AWS::AccountId, !Ref ManagementAccountId]
   isManagementRegion: !Equals [!Ref AWS::Region, !Ref ManagementRegion]
-  isManagementAccountAndRegion: !And [Condition: isManagementRegion, Condition: isManagementAccount]
 
 Resources:
 
@@ -75,7 +73,6 @@ Resources:
 
   InventoryPolicy:
     Type: AWS::IAM::Policy
-    DependsOn: CxmAssetCrawlerRole
     Condition: isManagementRegion  # Only one role per account
     Properties:
       PolicyName: !Sub '${Prefix}-asset-crawler-readonly${RoleSuffix}'

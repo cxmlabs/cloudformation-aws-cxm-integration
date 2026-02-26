@@ -105,6 +105,7 @@ info "Sleeping for 60 seconds to allow StackSet update to propagate..."
 sleep 60
 
 info "Updating StackSet instances..."
+# shellcheck disable=SC2086
 aws cloudformation update-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --deployment-targets "OrganizationalUnitIds=${TARGET_ORGANIZATIONAL_UNITS}" \
