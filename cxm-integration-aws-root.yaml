@@ -20,7 +20,7 @@ Parameters:
     Type: String
     Description: Name of the S3 bucket used to store CUR data (bucket name only, not the ARN — e.g. "my-cur-bucket", not "arn:aws:s3:::my-cur-bucket")
     AllowedPattern: '^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$'
-    ConstraintDescription: Must be an S3 bucket name (not an ARN). Example: my-cur-bucket
+    ConstraintDescription: "Must be an S3 bucket name (not an ARN). Example: my-cur-bucket"
   CostAndUsageReportS3BucketKmsKeyArn:
     Type: String
     Default: ''
