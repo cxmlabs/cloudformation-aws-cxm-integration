@@ -120,6 +120,7 @@ success "StackSet created successfully."
 # --------- Create Stack Instances ---------
 info "Creating StackSet instances for OUs: $TARGET_ORGANIZATIONAL_UNITS in regions: $TARGET_REGIONS..."
 
+# shellcheck disable=SC2086
 aws cloudformation create-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --deployment-targets "OrganizationalUnitIds=${TARGET_ORGANIZATIONAL_UNITS}" \

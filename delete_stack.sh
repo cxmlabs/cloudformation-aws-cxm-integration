@@ -72,6 +72,7 @@ fi
 # --------- Delete Stack Instances ---------
 info "Deleting StackSet instances for OUs: $TARGET_ORGANIZATIONAL_UNITS in regions: $TARGET_REGIONS..."
 
+# shellcheck disable=SC2086
 aws cloudformation delete-stack-instances \
   --stack-set-name CxmIntegrationStack-SubAccounts \
   --deployment-targets "OrganizationalUnitIds=${TARGET_ORGANIZATIONAL_UNITS}" \
