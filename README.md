@@ -9,6 +9,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `cxm-integration-aws-root.yaml` | Stack | Deploys to the management account: organization crawler role, CUR reader role, and EventBridge notification rules |
 | `cxm-integration-aws-sub-account.yaml` | StackSet | Deploys to member accounts: asset crawler role and EventBridge CloudFormation notifier |
 | `cxm-integration-aws-eks.yaml` | Stack | Optional — Grants CXM read-only access to an EKS cluster via Access Entries (deploy once per cluster) |
+| `cxm-integration-aws-flowlogs.yaml` | Stack | Optional — Deploys to the account/region hosting centralized VPC Flow Logs: reader role and EventBridge notifications |
 
 ## Prerequisites
 
@@ -49,6 +50,16 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `AccessScopeType` | No | `cluster` | `cluster` for full access, `namespace` to restrict |
 | `AccessScopeNamespaces` | No | `""` | Comma-separated namespaces (only when type is `namespace`) |
 | `KubernetesGroups` | No | `""` | Comma-separated Kubernetes groups for the access entry |
+| `Prefix` | No | `cxm` | Namespace prefix for resource names |
+
+### VPC Flow Logs Stack (`params-cxm-flowlogs.json`)
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `CXMExternalId` | Yes | — | External ID provided by CXM (same as root) |
+| `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
+| `VPCFlowLogsBucketName` | Yes | — | S3 bucket name storing centralized VPC Flow Logs |
+| `VPCFlowLogsBucketKmsKeyArn` | No | `""` | KMS key ARN if the Flow Logs bucket is encrypted |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
 
 ## Deployment
@@ -151,7 +162,31 @@ aws cloudformation create-stack \
 >   --access-config authenticationMode=API_AND_CONFIG_MAP
 > ```
 
-### 5. Verify Deployment
+### 5. Deploy VPC Flow Logs (Optional)
+
+If you have centralized VPC Flow Logs in an S3 bucket, deploy `cxm-integration-aws-flowlogs.yaml` as a separate stack **in the account and region where the Flow Logs bucket is located**. This may be a different account/region from the management account.
+
+```bash
+cp params-cxm-flowlogs-example.json params-cxm-flowlogs.json
+# Edit params-cxm-flowlogs.json with your values
+
+FLOWLOGS_REGION=eu-west-1  # Change to your Flow Logs bucket region
+
+aws cloudformation create-stack \
+  --stack-name CxmIntegrationStack-FlowLogs \
+  --template-body file://cxm-integration-aws-flowlogs.yaml \
+  --parameters file://params-cxm-flowlogs.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region $FLOWLOGS_REGION \
+  --profile org-network-logs  # Change to the Flow Logs account profile
+
+aws cloudformation wait stack-create-complete \
+  --stack-name CxmIntegrationStack-FlowLogs \
+  --region $FLOWLOGS_REGION \
+  --profile org-network-logs
+```
+
+### 6. Verify Deployment
 
 Retrieve the root stack outputs and confirm all resources were created:
 

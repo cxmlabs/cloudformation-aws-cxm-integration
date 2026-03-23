@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CXM Integration - VPC Flow Logs Reader.
+  Deploy this stack in the account and region where the centralized VPC Flow Logs S3 bucket is located.
+  This may be a different account and region from the management account.
+
+Parameters:
+  # CXM Accounts
+  CXMExternalId:
+    Type: String
+    Description: External ID created for this deployment
+  CXMCustomerAccountId:
+    Type: String
+    Description: Account ID of the instance set up for this deployment
+  # Flow Logs Bucket
+  VPCFlowLogsBucketName:
+    Type: String
+    Description: Name of the S3 bucket storing centralized VPC Flow Logs
+  VPCFlowLogsBucketKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: Optional - ARN of the KMS key used to encrypt VPC Flow Logs data in S3.
+  # Prefix / Suffix
+  Prefix:
+    Type: String
+    Default: cxm
+    Description: Generic ID to namespace the stacks
+  RoleSuffix:
+    Type: String
+    Default: ""
+    Description: Role name suffix
+
+Conditions:
+  isKmsKeyArnSet: !Not [ !Equals [ !Ref VPCFlowLogsBucketKmsKeyArn, '' ] ]
+
+Resources:
+
+  ################################################################
+  #
+  # VPC Flow Logs Reader
+  #
+  ################################################################
+  CxmFlowLogsReaderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Prefix}-flowlogs-reader${RoleSuffix}'
+      MaxSessionDuration: 43200
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Principal:
+              AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Sub '${CXMExternalId}'
+
+  CxmFlowLogsReaderPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CxmFlowLogsReaderRole
+    Properties:
+      PolicyName: !Sub '${Prefix}-flowlogs-reader${RoleSuffix}-policy'
+      Roles:
+        - !Ref 'CxmFlowLogsReaderRole'
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "s3:ListBucket"
+            Resource: !Sub "arn:aws:s3:::${VPCFlowLogsBucketName}"
+          - Effect: Allow
+            Action:
+              - "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${VPCFlowLogsBucketName}/*"
+          - "Fn::If":
+            - isKmsKeyArnSet
+            - Effect: Allow
+              Action:
+                - "kms:Decrypt"
+                - "kms:GenerateDataKey"
+              Resource: !Ref VPCFlowLogsBucketKmsKeyArn
+              Condition:
+                StringEquals:
+                  kms:EncryptionContext: !Sub "arn:aws:s3:::${VPCFlowLogsBucketName}"
+            - !Ref AWS::NoValue
+
+  ################################################################
+  #
+  # Notifications
+  #
+  ################################################################
+  CxmFlowLogsNotificationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}-flowlogs-notification${RoleSuffix}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "events.amazonaws.com"
+
+  CxmFlowLogsNotificationRolePolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CxmFlowLogsNotificationRole
+    Properties:
+      PolicyName: !Sub "${Prefix}-flowlogs-notification${RoleSuffix}-policy"
+      Roles:
+        - !Ref CxmFlowLogsNotificationRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: "events:PutEvents"
+            Resource:
+              - !Sub "arn:aws:events:*:${CXMCustomerAccountId}:event-bus/data-plane*"
+
+  CxmFlowLogsBucketEventRule:
+    Type: AWS::Events::Rule
+    DependsOn: CxmFlowLogsNotificationRole
+    Properties:
+      Name: !Sub "${Prefix}-flowlogs-bucket-change-notifier${RoleSuffix}"
+      Description: "Notifies when changes happen to files in the VPC Flow Logs S3 bucket"
+      EventPattern:
+        source:
+          - "aws.s3"
+        detail-type:
+          - "Object Created"
+          - "Object Deleted"
+        detail:
+          bucket:
+            name:
+              - !Ref VPCFlowLogsBucketName
+      Targets:
+        - Id: "SendToDataPlaneBus"
+          Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/data-plane"
+          RoleArn: !GetAtt CxmFlowLogsNotificationRole.Arn
+
+################################################################
+#
+# Outputs
+#
+################################################################
+Outputs:
+  # Echoing inputs for debug
+  Prefix:
+    Description: Generic ID to namespace the stacks
+    Value: !Ref Prefix
+  RoleSuffix:
+    Description: Role name suffix
+    Value: !Ref RoleSuffix
+  VPCFlowLogsBucketName:
+    Description: Name of the S3 bucket storing VPC Flow Logs
+    Value: !Ref VPCFlowLogsBucketName
+
+  # Flow Logs Reader
+  CxmFlowLogsReaderRoleArn:
+    Description: ARN of the VPC Flow Logs Reader IAM Role
+    Value: !GetAtt CxmFlowLogsReaderRole.Arn
+  CxmFlowLogsReaderRoleId:
+    Description: Id of the VPC Flow Logs Reader IAM Role
+    Value: !GetAtt CxmFlowLogsReaderRole.RoleId
