@@ -15,41 +15,28 @@ Parameters:
     Description: Your 12-digit AWS Organizations management account ID
     AllowedPattern: '^\d{12}$'
     ConstraintDescription: Must be a 12-digit AWS account ID
-  # Regions
-  ManagementRegion:  # where the S3 for CUR is
-    Type: String
-    Default: "us-east-1"
-    Description: Management region where roles will be created
-  # Prefix / Suffix
+  # Prefix
   Prefix:
     Type: String
     Default: cxm
     Description: Generic ID to namespace the stacks
-  RoleSuffix:
-    Type: String
-    Default: ""
-    Description: Role name suffix
-
-Conditions:
-  isManagementRegion: !Equals [!Ref AWS::Region, !Ref ManagementRegion]
 
 Resources:
 
   ################################################################
   #
-  # Asset Crawler (everywhere)
+  # Asset Crawler
   #
   ################################################################
   CxmAssetCrawlerRole:
     Type: AWS::IAM::Role
     DependsOn: CloudFormationNotifier
-    Condition: isManagementRegion  # Only one role per account
     Properties:
-      RoleName: !Sub '${Prefix}-asset-crawler${RoleSuffix}'
+      RoleName: !Sub '${Prefix}-asset-crawler'
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/ReadOnlyAccess"  # Readonly managed policy
-        - "arn:aws:iam::aws:policy/ServiceQuotasFullAccess"         # Required to request increases of SQs for RI and SPs
-        - "arn:aws:iam::aws:policy/AWSSavingsPlansFullAccess"       # Required to manage Savings Plans
+        - "arn:aws:iam::aws:policy/ReadOnlyAccess"
+        - "arn:aws:iam::aws:policy/ServiceQuotasFullAccess"
+        - "arn:aws:iam::aws:policy/AWSSavingsPlansFullAccess"
       MaxSessionDuration: 43200
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -69,13 +56,12 @@ Resources:
               - sts:AssumeRole
               - sts:TagSession
             Principal:
-              AWS: !Sub "arn:aws:iam::${ManagementAccountId}:role/${Prefix}-organization-crawler${RoleSuffix}"  # can be chain-assumed by organization main CXM role
+              AWS: !Sub "arn:aws:iam::${ManagementAccountId}:role/${Prefix}-organization-crawler"
 
   InventoryPolicy:
     Type: AWS::IAM::Policy
-    Condition: isManagementRegion  # Only one role per account
     Properties:
-      PolicyName: !Sub '${Prefix}-asset-crawler-readonly${RoleSuffix}'
+      PolicyName: !Sub '${Prefix}-asset-crawler-readonly'
       Roles:
         - !Ref 'CxmAssetCrawlerRole'
       PolicyDocument:
@@ -159,9 +145,8 @@ Resources:
   ################################################################
   IAMCrossAccountNotificationRole:
     Type: AWS::IAM::Role
-    Condition: isManagementRegion  # Only one per account
     Properties:
-      RoleName: !Sub '${Prefix}-feedback-loop-control-plane${RoleSuffix}'
+      RoleName: !Sub '${Prefix}-feedback-loop-control-plane'
       MaxSessionDuration: 43200
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -181,7 +166,6 @@ Resources:
 
   CloudFormationNotifier:
     Type: AWS::Events::Rule
-    # Condition: EVERYWHERE
     Properties:
       Description: Notifies when one of our CloudFormation Stack changes state
       EventPattern:
@@ -210,37 +194,16 @@ Resources:
       Targets:
         - Id: CloudFormationNotifier
           Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/control-plane"
-          RoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/${Prefix}-feedback-loop-control-plane${RoleSuffix}"
+          RoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/${Prefix}-feedback-loop-control-plane"
 
 Outputs:
-  # Echoing inputs for debug
+  # Diagnostic
   Prefix:
-    Description: Generic ID to namespace the stacks
+    Description: Namespace prefix used for resource names
     Value: !Ref Prefix
-  RoleSuffix:
-    Description: Role name suffix
-    Value: !Ref RoleSuffix
-  ManagementRegion:
-    Description: Management region where roles will be created
-    Value: !Ref ManagementRegion
   ManagementAccountId:
     Description: AWS Organizations management account ID
     Value: !Ref ManagementAccountId
-
-  # Asset crawler
-  CxmAssetCrawlerRoleArn:
-    Description: ARN of the Asset Crawler IAM Role
-    Value: !GetAtt CxmAssetCrawlerRole.Arn
-    Condition: isManagementRegion  # Only one role per account
-  CxmAssetCrawlerRoleId:
-    Description: Id of the Asset Crawler IAM Role
-    Value: !GetAtt CxmAssetCrawlerRole.RoleId
-    Condition: isManagementRegion  # Only one role per account
-
-  # Verification outputs
-  CXMCustomerAccountId:
-    Description: CXM account ID trusted in role assume policies
-    Value: !Ref CXMCustomerAccountId
   DeployedAccountId:
     Description: Actual AWS account ID where this stack is running
     Value: !Ref AWS::AccountId
@@ -248,3 +211,15 @@ Outputs:
     Description: Actual AWS region where this stack is running
     Value: !Ref AWS::Region
 
+  # Asset crawler
+  CxmAssetCrawlerRoleArn:
+    Description: ARN of the Asset Crawler IAM Role
+    Value: !GetAtt CxmAssetCrawlerRole.Arn
+  CxmAssetCrawlerRoleId:
+    Description: Id of the Asset Crawler IAM Role
+    Value: !GetAtt CxmAssetCrawlerRole.RoleId
+
+  # Verification
+  CXMCustomerAccountId:
+    Description: CXM account ID trusted in role assume policies
+    Value: !Ref CXMCustomerAccountId

@@ -24,13 +24,10 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 |-----------|----------|---------|-------------|
 | `CXMExternalId` | Yes | — | External ID provided by CXM |
 | `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM |
-| `ManagementAccountId` | Yes | — | Your 12-digit AWS Organizations management account ID (where CXM roles are created) |
 | `CostAndUsageReportS3BucketName` | Yes | — | S3 bucket name storing your CUR data (bucket name only, not the ARN — e.g. `my-cur-bucket`) |
 | `CostAndUsageReportS3BucketKmsKeyArn` | No | `""` | KMS key ARN if your CUR bucket is encrypted (e.g. `arn:aws:kms:us-east-1:123456789012:key/...`) |
 | `CostAndUsageBucketRegion` | No | `us-east-1` | Region of the CUR S3 bucket |
-| `ManagementRegion` | No | `us-east-1` | Region where IAM roles are created |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
-| `RoleSuffix` | No | `""` | Optional suffix appended to IAM role names |
 
 ### Sub-Account StackSet (`params-cxm-sub-accounts.json`)
 
@@ -41,9 +38,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `CXMExternalId` | Yes | — | External ID provided by CXM (same as root) |
 | `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
 | `ManagementAccountId` | Yes | — | Your 12-digit AWS Organizations management account ID |
-| `ManagementRegion` | No | `us-east-1` | Region where roles are created |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
-| `RoleSuffix` | No | `""` | Optional suffix appended to IAM role names |
 
 ### EKS Stack (inline parameters)
 
@@ -58,6 +53,16 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 
 ## Deployment
 
+### Where to deploy
+
+**Deploy the root stack to the region where your CUR S3 bucket lives** (e.g. `us-west-2` if your CUR bucket is in `us-west-2`). IAM roles are global, so they work regardless of region, but the CUR S3 event notification rule only captures events in the bucket's region.
+
+After deployment, check the stack outputs:
+- `CURReaderCreated` should show `YES`
+- `ResourcesCreated` should show `All resources created`
+
+If `CURReaderCreated` shows `NO`, you deployed to the wrong region — redeploy to the CUR bucket region.
+
 ### 1. Configure Parameters
 
 ```bash
@@ -70,16 +75,19 @@ Edit both files and fill in the values provided by CXM.
 ### 2. Deploy the Root Stack
 
 ```bash
+# Deploy to the CUR bucket region (e.g. us-west-2)
+CUR_REGION=us-east-1  # Change to your CUR bucket region
+
 aws cloudformation create-stack \
   --stack-name CxmIntegrationStack-Main \
   --template-body file://cxm-integration-aws-root.yaml \
   --parameters file://params-cxm-root.json \
   --capabilities CAPABILITY_NAMED_IAM \
-  --region us-east-1
+  --region $CUR_REGION
 
 aws cloudformation wait stack-create-complete \
   --stack-name CxmIntegrationStack-Main \
-  --region us-east-1
+  --region $CUR_REGION
 ```
 
 ### 3. Deploy the Sub-Accounts StackSet
@@ -93,7 +101,7 @@ aws cloudformation create-stack-set \
   --capabilities CAPABILITY_NAMED_IAM \
   --permission-model SERVICE_MANAGED \
   --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
-  --region us-east-1
+  --region $CUR_REGION
 
 # Deploy instances to your OUs and regions
 aws cloudformation create-stack-instances \
@@ -101,7 +109,7 @@ aws cloudformation create-stack-instances \
   --deployment-targets OrganizationalUnitIds='["ou-xxxx-xxxxxxxx"]' \
   --regions us-east-1 us-east-2 eu-west-1 \
   --operation-preferences FailureTolerancePercentage=100,MaxConcurrentPercentage=50 \
-  --region us-east-1
+  --region $CUR_REGION
 ```
 
 Auto-deployment is enabled — new accounts joining the targeted OUs will receive the stack automatically.
@@ -143,17 +151,24 @@ aws cloudformation create-stack \
 >   --access-config authenticationMode=API_AND_CONFIG_MAP
 > ```
 
-### 5. Verify & Share Outputs
+### 5. Verify Deployment
 
-Retrieve the root stack outputs and share them with CXM to complete the integration:
+Retrieve the root stack outputs and confirm all resources were created:
 
 ```bash
 aws cloudformation describe-stacks \
   --stack-name CxmIntegrationStack-Main \
   --query "Stacks[0].Outputs" \
-  --output json \
-  --region us-east-1
+  --output table \
+  --region $CUR_REGION
 ```
+
+Check that:
+- `CxmOrganizationCrawlerRoleArn` is present (org crawler created)
+- `CURReaderCreated` shows `YES` (CUR reader created in the right region)
+- `ResourcesCreated` shows `All resources created (org crawler, CUR reader, notifications)`
+
+Share the outputs with CXM to complete the integration.
 
 ## Updating
 
@@ -166,11 +181,11 @@ aws cloudformation update-stack \
   --template-body file://cxm-integration-aws-root.yaml \
   --parameters file://params-cxm-root.json \
   --capabilities CAPABILITY_NAMED_IAM \
-  --region us-east-1
+  --region $CUR_REGION
 
 aws cloudformation wait stack-update-complete \
   --stack-name CxmIntegrationStack-Main \
-  --region us-east-1
+  --region $CUR_REGION
 
 # Update the StackSet
 aws cloudformation update-stack-set \
@@ -180,7 +195,7 @@ aws cloudformation update-stack-set \
   --capabilities CAPABILITY_NAMED_IAM \
   --permission-model SERVICE_MANAGED \
   --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
-  --region us-east-1
+  --region $CUR_REGION
 
 # Update existing instances (after the StackSet update finishes)
 aws cloudformation update-stack-instances \
@@ -188,7 +203,7 @@ aws cloudformation update-stack-instances \
   --deployment-targets OrganizationalUnitIds='["ou-xxxx-xxxxxxxx"]' \
   --regions us-east-1 us-east-2 eu-west-1 \
   --operation-preferences FailureTolerancePercentage=100,MaxConcurrentPercentage=50 \
-  --region us-east-1
+  --region $CUR_REGION
 ```
 
 ## Uninstalling
@@ -202,21 +217,21 @@ aws cloudformation delete-stack-instances \
   --deployment-targets OrganizationalUnitIds='["ou-xxxx-xxxxxxxx"]' \
   --regions us-east-1 us-east-2 eu-west-1 \
   --no-retain-stacks \
-  --region us-east-1
+  --region $CUR_REGION
 
 # Wait for instances to be deleted, then delete the StackSet
 aws cloudformation delete-stack-set \
   --stack-set-name CxmIntegrationStack-SubAccounts \
-  --region us-east-1
+  --region $CUR_REGION
 
 # Delete the root stack
 aws cloudformation delete-stack \
   --stack-name CxmIntegrationStack-Main \
-  --region us-east-1
+  --region $CUR_REGION
 
 aws cloudformation wait stack-delete-complete \
   --stack-name CxmIntegrationStack-Main \
-  --region us-east-1
+  --region $CUR_REGION
 ```
 
 If you deployed EKS stacks, delete those separately:
