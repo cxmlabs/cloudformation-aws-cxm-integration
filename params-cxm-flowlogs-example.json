@@ -1,0 +1,17 @@
+[
+  {"ParameterKey": "CXMCustomerAccountId",
+  "ParameterValue": "112233445566"},
+
+  {"ParameterKey": "CXMExternalId",
+  "ParameterValue": "my-cxm-external-id"},
+
+  {"ParameterKey": "VPCFlowLogsBucketName",
+  "ParameterValue": "my-centralized-flowlogs-bucket"},
+
+  {"ParameterKey": "VPCFlowLogsBucketKmsKeyArn",
+  "ParameterValue": ""},
+
+  {"ParameterKey": "RoleSuffix",
+  "ParameterValue": ""}
+
+]
