@@ -115,6 +115,42 @@ Resources:
               - memorydb:PurchaseReservedNodesOffering
               # Saving Plans full management
               - savingsplans:*
+          # Scaling & stop/start permissions (FinOps cost optimization)
+          - Sid: SchedulingPermissions
+            Effect: Allow
+            Resource: "*"
+            Action:
+              # ECS Scaling
+              - ecs:UpdateService
+              # EC2 Stop/Start
+              - ec2:StartInstances
+              - ec2:StopInstances
+              # RDS Stop/Start
+              - rds:StartDBInstance
+              - rds:StopDBInstance
+              - rds:StartDBCluster
+              - rds:StopDBCluster
+              # Lambda Concurrency
+              - lambda:PutProvisionedConcurrencyConfig
+              - lambda:DeleteProvisionedConcurrencyConfig
+              - lambda:PutFunctionConcurrency
+              - lambda:DeleteFunctionConcurrency
+              # EKS Nodegroup Scaling
+              - eks:UpdateNodegroupConfig
+              # ASG Scaling
+              - autoscaling:UpdateAutoScalingGroup
+              - autoscaling:SetDesiredCapacity
+              # Application Auto Scaling
+              - application-autoscaling:RegisterScalableTarget
+              # ElastiCache Scaling
+              - elasticache:ModifyReplicationGroup
+              - elasticache:ModifyCacheCluster
+              # Redshift Scaling
+              - redshift:PauseCluster
+              - redshift:ResumeCluster
+              - redshift:ResizeCluster
+              # SageMaker Scaling
+              - sagemaker:UpdateEndpointWeightsAndCapacities
           # Explicitly denying data plane API Calls
           - Effect: Deny
             Resource: "*"
