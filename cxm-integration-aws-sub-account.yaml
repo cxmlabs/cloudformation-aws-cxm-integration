@@ -23,11 +23,11 @@ Parameters:
   # Feature toggles
   EnableScheduling:
     Type: String
-    Default: "true"
+    Default: "false"
     AllowedValues:
       - "true"
       - "false"
-    Description: Enable scheduling and scaling permissions for FinOps cost optimization (stop/start EC2, RDS, scale ECS, ASG, etc.)
+    Description: Enable scheduling and scaling permissions for FinOps cost optimization (disabled by default)
 
 Conditions:
   SchedulingEnabled: !Equals [!Ref EnableScheduling, "true"]
@@ -191,7 +191,9 @@ Resources:
               # ASG Scaling
               - autoscaling:UpdateAutoScalingGroup
               - autoscaling:SetDesiredCapacity
-              # Application Auto Scaling
+              # Application Auto Scaling (NOTE: covers all App Auto Scaling
+              # namespaces — ECS, DynamoDB, AppStream, etc. — AWS does not
+              # offer namespace-scoped IAM actions for this service)
               - application-autoscaling:RegisterScalableTarget
               # ElastiCache Scaling (NOTE: these actions are broader than scaling
               # alone — they also allow changing engine versions, parameter groups,
