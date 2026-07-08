@@ -122,6 +122,12 @@ Resources:
               - memorydb:PurchaseReservedNodesOffering
               # Saving Plans full management
               - savingsplans:*
+          - Sid: BedrockInventoryPermissions
+            Effect: Allow
+            Resource: "*"
+            Action:
+              - bedrock:List*
+              - bedrock:Get*
           - Sid: ManageReportDefinitions
             Effect: Allow
             Action:

@@ -126,6 +126,12 @@ Resources:
               - memorydb:PurchaseReservedNodesOffering
               # Saving Plans full management
               - savingsplans:*
+          - Sid: BedrockInventoryPermissions
+            Effect: Allow
+            Resource: "*"
+            Action:
+              - bedrock:List*
+              - bedrock:Get*
           # Explicitly denying data plane API Calls
           - Sid: ExplicitDenyToDataPlane
             Effect: Deny
