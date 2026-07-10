@@ -15,6 +15,15 @@ Parameters:
     Description: Your 12-digit AWS Organizations management account ID
     AllowedPattern: '^\d{12}$'
     ConstraintDescription: Must be a 12-digit AWS account ID
+  # Regions
+  ManagementRegion:
+    Type: String
+    Default: "us-east-1"
+    Description: >-
+      Single region in which the (global) IAM roles are created. IAM roles are
+      global, so in a multi-region StackSet they must be created in exactly one
+      region to avoid "already exists" collisions; EventBridge rules deploy to
+      every region regardless.
   # Prefix
   Prefix:
     Type: String
@@ -31,6 +40,8 @@ Parameters:
 
 Conditions:
   SchedulingEnabled: !Equals [!Ref EnableScheduling, "true"]
+  isManagementRegion: !Equals [!Ref AWS::Region, !Ref ManagementRegion]
+  isSchedulingAndManagementRegion: !And [Condition: SchedulingEnabled, Condition: isManagementRegion]
 
 Resources:
 
@@ -41,6 +52,7 @@ Resources:
   ################################################################
   CxmAssetCrawlerRole:
     Type: AWS::IAM::Role
+    Condition: isManagementRegion  # Only one role per account (IAM is global)
     DependsOn: CloudFormationNotifier
     Properties:
       RoleName: !Sub '${Prefix}-asset-crawler'
@@ -71,6 +83,7 @@ Resources:
 
   InventoryPolicy:
     Type: AWS::IAM::Policy
+    Condition: isManagementRegion  # Only one per account (attaches to the global role)
     Properties:
       PolicyName: !Sub '${Prefix}-asset-crawler-readonly'
       Roles:
@@ -167,7 +180,7 @@ Resources:
   ################################################################
   SchedulingPolicy:
     Type: AWS::IAM::Policy
-    Condition: SchedulingEnabled
+    Condition: isSchedulingAndManagementRegion  # Only one per account (attaches to the global role)
     Properties:
       PolicyName: !Sub '${Prefix}-asset-crawler-scheduling'
       Roles:
@@ -223,6 +236,7 @@ Resources:
   ################################################################
   IAMCrossAccountNotificationRole:
     Type: AWS::IAM::Role
+    Condition: isManagementRegion  # Only one role per account (IAM is global)
     Properties:
       RoleName: !Sub '${Prefix}-feedback-loop-control-plane'
       MaxSessionDuration: 43200
@@ -289,11 +303,13 @@ Outputs:
     Description: Actual AWS region where this stack is running
     Value: !Ref AWS::Region
 
-  # Asset crawler
+  # Asset crawler (created only in the management region — see isManagementRegion)
   CxmAssetCrawlerRoleArn:
+    Condition: isManagementRegion
     Description: ARN of the Asset Crawler IAM Role
     Value: !GetAtt CxmAssetCrawlerRole.Arn
   CxmAssetCrawlerRoleId:
+    Condition: isManagementRegion
     Description: Id of the Asset Crawler IAM Role
     Value: !GetAtt CxmAssetCrawlerRole.RoleId
 
