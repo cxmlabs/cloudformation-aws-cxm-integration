@@ -20,6 +20,18 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional - ARN of the KMS key used to encrypt VPC Flow Logs data in S3.
+  # In-place query access
+  EnableInPlaceQueryGrant:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+    Description: Set to true to render the bucket and KMS key policy statements CXM needs to query the bucket in place. Rendering changes nothing in your account — the statements appear as stack outputs for you to merge into the bucket's existing policy yourself.
+  InPlaceQueryObjectPrefix:
+    Type: String
+    Default: AWSLogs
+    Description: Object key prefix the in-place query grant is narrowed to, without a trailing slash.
+    AllowedPattern: '^[A-Za-z0-9!_.*''()\-]+(/[A-Za-z0-9!_.*''()\-]+)*$'
+    ConstraintDescription: Must be an S3 key prefix with no leading or trailing slash (e.g. AWSLogs)
   # Prefix / Suffix
   Prefix:
     Type: String
@@ -32,6 +44,8 @@ Parameters:
 
 Conditions:
   isKmsKeyArnSet: !Not [ !Equals [ !Ref VPCFlowLogsBucketKmsKeyArn, '' ] ]
+  isInPlaceQueryGrantEnabled: !Equals [ !Ref EnableInPlaceQueryGrant, 'true' ]
+  isInPlaceQueryKmsGrantNeeded: !And [ !Condition isInPlaceQueryGrantEnabled, !Condition isKmsKeyArnSet ]
 
 Resources:
 
@@ -154,6 +168,51 @@ Outputs:
   VPCFlowLogsBucketName:
     Description: Name of the S3 bucket storing VPC Flow Logs
     Value: !Ref VPCFlowLogsBucketName
+
+  # In-place query access. CloudFormation replaces the whole bucket policy and cannot read
+  # the existing one, so the statements are rendered for you to merge — no resource is created.
+  InPlaceQueryBucketPolicyStatements:
+    Condition: isInPlaceQueryGrantEnabled
+    Description: Bucket policy statements to merge into the bucket's existing policy so CXM can query it in place. Keep the three statements separate.
+    Value: !Sub |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "CxMInPlaceGetObject",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::${VPCFlowLogsBucketName}/${InPlaceQueryObjectPrefix}/*"
+          },
+          {
+            "Sid": "CxMInPlaceListBucket",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::${VPCFlowLogsBucketName}",
+            "Condition": { "StringLike": { "s3:prefix": "${InPlaceQueryObjectPrefix}/*" } }
+          },
+          {
+            "Sid": "CxMInPlaceGetBucketLocation",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:GetBucketLocation",
+            "Resource": "arn:aws:s3:::${VPCFlowLogsBucketName}"
+          }
+        ]
+      }
+  InPlaceQueryKmsKeyPolicyStatement:
+    Condition: isInPlaceQueryKmsGrantNeeded
+    Description: KMS key policy statement to merge into the encryption key's existing policy. Merge it — replacing a key policy without its administrative statements locks the key permanently.
+    Value: !Sub |
+      {
+        "Sid": "CxMInPlaceDecrypt",
+        "Effect": "Allow",
+        "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+        "Action": ["kms:Decrypt", "kms:DescribeKey"],
+        "Resource": "*"
+      }
 
   # Flow Logs Reader
   CxmFlowLogsReaderRoleArn:
