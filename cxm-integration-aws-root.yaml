@@ -19,7 +19,7 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional — ARN of the KMS key used to encrypt CUR data (e.g. "arn:aws:kms:us-east-1:123456789012:key/abc-def"). Leave empty if not encrypted with a custom key.
-    AllowedPattern: '^(arn:aws:kms:[a-z0-9-]+:\d{12}:key/[a-f0-9-]+)?$'
+    AllowedPattern: '^(arn:aws:kms:[a-z0-9-]+:\d{12}:key/(mrk-)?[a-f0-9-]+)?$'
     ConstraintDescription: Must be a valid KMS key ARN or empty
   # Regions
   CostAndUsageBucketRegion:

@@ -40,8 +40,8 @@ Parameters:
       Object key prefix the grant is narrowed to. A trailing "/" is added automatically,
       so pass "AWSLogs", not "AWSLogs/". CloudTrail and VPC Flow Logs both write under
       "AWSLogs" by default.
-    AllowedPattern: '^.*[^/]$'
-    ConstraintDescription: Must not be empty and must not end with a "/"
+    AllowedPattern: '^[^/]$|^[^/].*[^/]$'
+    ConstraintDescription: Must not be empty and must not start or end with a "/"
   KmsKeyArn:
     Type: String
     Default: ''
@@ -50,7 +50,7 @@ Parameters:
       statement is rendered in the outputs for you to merge into the key policy.
       CloudFormation cannot edit the policy of a pre-existing KMS key, so this is always
       a manual merge.
-    AllowedPattern: '^(arn:aws:kms:[a-z0-9-]+:\d{12}:key/[a-f0-9-]+)?$'
+    AllowedPattern: '^(arn:aws:kms:[a-z0-9-]+:\d{12}:key/(mrk-)?[a-f0-9-]+)?$'
     ConstraintDescription: Must be a valid KMS key ARN or empty
   ManageBucketPolicy:
     Type: String
