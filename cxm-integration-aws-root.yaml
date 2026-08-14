@@ -31,10 +31,23 @@ Parameters:
     Type: String
     Default: cxm
     Description: Generic ID to namespace the stacks
+  # Feature toggles
+  EnableSavingsModifications:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >-
+      Enable Savings Plan / Reserved Instance modifications (purchase, modify, cancel) and
+      CUR report definition writes. Set to "false" for a read-only proof of concept — CXM
+      then reports on commitments but cannot act on them. Defaults to "true" to preserve
+      existing behaviour.
 
 Conditions:
   isCostAndUsageBucketRegion: !Equals [!Ref AWS::Region, !Ref CostAndUsageBucketRegion]
   isCURKmsKeyArnSet: !Not [ !Equals [ !Ref CostAndUsageReportS3BucketKmsKeyArn, '' ] ]
+  SavingsModificationsEnabled: !Equals [!Ref EnableSavingsModifications, "true"]
 
 Resources:
 
@@ -47,11 +60,16 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub '${Prefix}-organization-crawler'
-      ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess"
-        - "arn:aws:iam::aws:policy/ReadOnlyAccess"
-        - "arn:aws:iam::aws:policy/ServiceQuotasFullAccess"
-        - "arn:aws:iam::aws:policy/AWSSavingsPlansFullAccess"
+      ManagedPolicyArns: !If
+        - SavingsModificationsEnabled
+        - - "arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess"
+          - "arn:aws:iam::aws:policy/ReadOnlyAccess"
+          - "arn:aws:iam::aws:policy/ServiceQuotasFullAccess"
+          - "arn:aws:iam::aws:policy/AWSSavingsPlansFullAccess"
+        - - "arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess"
+          - "arn:aws:iam::aws:policy/ReadOnlyAccess"
+          - "arn:aws:iam::aws:policy/ServiceQuotasReadOnlyAccess"
+          - "arn:aws:iam::aws:policy/AWSSavingsPlansReadOnlyAccess"
       MaxSessionDuration: 43200
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -74,14 +92,13 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: CommitmentManagementPermissions
+          - Sid: CommitmentMonitoringPermissions
             Effect: Allow
             Resource: "*"
             Action:
               # DynamoDB Reservations
               - dynamodb:DescribeReservedCapacity
               - dynamodb:DescribeReservedCapacityOfferings
-              - dynamodb:PurchaseReservedCapacityOfferings
               # EC2 Reservations
               - ec2:DescribeReserved*
               - ec2:DescribeAvailabilityZones
@@ -91,50 +108,35 @@ Resources:
               - ec2:DescribeInstanceTypes
               - ec2:DescribeTags
               - ec2:GetReserved*
-              - ec2:ModifyReservedInstances
-              - ec2:PurchaseReservedInstancesOffering
-              - ec2:CreateReservedInstancesListing
-              - ec2:CancelReservedInstancesListing
-              - ec2:GetReservedInstancesExchangeQuote
-              - ec2:AcceptReservedInstancesExchangeQuote
               # RDS Reservations
               - rds:DescribeReserved*
               - rds:ListTagsForResource*
-              - rds:PurchaseReservedDBInstancesOffering
               # Redshift Reservations
               - redshift:DescribeReserved*
               - redshift:DescribeTags
               - redshift:GetReserved*
-              - redshift:AcceptReservedNodeExchange
-              - redshift:PurchaseReservedNodeOffering
               # ElastiCache Reservations
               - elasticache:DescribeReserved*
               - elasticache:ListTagsForResource
-              - elasticache:PurchaseReservedCacheNodesOffering
               # ElasticSearch Reservations
               - es:DescribeReserved*
               - es:ListTags
-              - es:PurchaseReservedElasticsearchInstanceOffering
-              - es:PurchaseReservedInstanceOffering
               # memoryDB
               - memorydb:DescribeReserved*
               - memorydb:ListTags
-              - memorydb:PurchaseReservedNodesOffering
-              # Saving Plans full management
-              - savingsplans:*
+              # Savings Plans read access comes from the AWSSavingsPlansReadOnlyAccess /
+              # AWSSavingsPlansFullAccess managed policy attached above.
           - Sid: BedrockInventoryPermissions
             Effect: Allow
             Resource: "*"
             Action:
               - bedrock:List*
               - bedrock:Get*
-          - Sid: ManageReportDefinitions
+          - Sid: MonitorReportDefinitions
             Effect: Allow
             Action:
               - cur:DescribeReportDefinitions
               - cur:ListTagsForResource
-              - cur:ModifyReportDefinition
-              - cur:PutReportDefinition
               - bcm-data-exports:List*
               - bcm-data-exports:Get*
               - bcm-data-exports:ListTagsForResource
@@ -177,6 +179,7 @@ Resources:
               - ecr:BatchGetImage
               - ecr:GetAuthorizationToken
               - ecr:GetDownloadUrlForLayer
+              - ecs:RegisterTaskDefinition
               - kinesis:GetRecords
               - kinesis:GetShardIterator
               - lambda:GetFunction
@@ -187,11 +190,70 @@ Resources:
               - sqs:ReceiveMessage
               - rds-data:*
             Resource: "*"
+          # ReadOnlyAccess grants s3:GetObject; the crawler never reads object bodies. The
+          # CUR reader role below is the only identity meant to read S3. Deny on the object
+          # ARN pattern — pairing Deny with NotResource would match every other bucket.
+          - Sid: ExplicitDenyOnS3Files
+            Effect: Deny
+            Action:
+              - s3:GetObject
+            Resource:
+              - "arn:aws:s3:::*/*"
           - Sid: AssumeRoleToMemberAccounts
             Effect: Allow
             Action:
               - sts:AssumeRole
             Resource: !Sub "arn:aws:iam::*:role/${Prefix}*"
+
+  ################################################################
+  #
+  # Savings Plan / RI modifications
+  # Only created when EnableSavingsModifications is "true"
+  #
+  ################################################################
+  CxmOrganizationSavingsModificationsPolicy:
+    Type: AWS::IAM::Policy
+    Condition: SavingsModificationsEnabled
+    Properties:
+      PolicyName: !Sub '${Prefix}-organization-crawler-savings-modifications-policy'
+      Roles:
+        - !Ref CxmOrganizationCrawlerRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ManageReportDefinitions
+            Effect: Allow
+            Resource: "*"
+            Action:
+              - cur:ModifyReportDefinition
+              - cur:PutReportDefinition
+          - Sid: CommitmentManagementPermissions
+            Effect: Allow
+            Resource: "*"
+            Action:
+              # DynamoDB Reservations
+              - dynamodb:PurchaseReservedCapacityOfferings
+              # EC2 Reservations
+              - ec2:ModifyReservedInstances
+              - ec2:PurchaseReservedInstancesOffering
+              - ec2:CreateReservedInstancesListing
+              - ec2:CancelReservedInstancesListing
+              - ec2:GetReservedInstancesExchangeQuote
+              - ec2:AcceptReservedInstancesExchangeQuote
+              # RDS Reservations
+              - rds:PurchaseReservedDBInstancesOffering
+              # Redshift Reservations
+              - redshift:AcceptReservedNodeExchange
+              - redshift:PurchaseReservedNodeOffering
+              # ElastiCache Reservations
+              - elasticache:PurchaseReservedCacheNodesOffering
+              # ElasticSearch Reservations
+              - es:PurchaseReservedElasticsearchInstanceOffering
+              - es:PurchaseReservedInstanceOffering
+              # memoryDB
+              - memorydb:PurchaseReservedNodesOffering
+              # Savings Plans management comes from the AWSSavingsPlansFullAccess managed
+              # policy attached above.
 
   ################################################################
   #

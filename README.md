@@ -10,6 +10,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `cxm-integration-aws-sub-account.yaml` | StackSet | Deploys to member accounts: asset crawler role and EventBridge CloudFormation notifier |
 | `cxm-integration-aws-eks.yaml` | Stack | Optional — Grants CXM read-only access to an EKS cluster via Access Entries (deploy once per cluster) |
 | `cxm-integration-aws-flowlogs.yaml` | Stack | Optional — Deploys to the account/region hosting centralized VPC Flow Logs: reader role and EventBridge notifications |
+| `cxm-integration-aws-s3-inplace-query.yaml` | Stack | Optional — Renders (or applies) the bucket/KMS resource-policy statements that let CXM query a CloudTrail or VPC Flow Logs bucket in place with Athena (deploy once per bucket) |
 
 ## Prerequisites
 
@@ -29,6 +30,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `CostAndUsageReportS3BucketKmsKeyArn` | No | `""` | KMS key ARN if your CUR bucket is encrypted (e.g. `arn:aws:kms:us-east-1:123456789012:key/...`) |
 | `CostAndUsageBucketRegion` | No | `us-east-1` | Region of the CUR S3 bucket |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
+| `EnableSavingsModifications` | No | `true` | `false` gives the crawler read-only commitment access — it reports on Savings Plans/RIs but cannot purchase, modify or cancel them, and cannot write CUR report definitions. Use for a read-only proof of concept |
 
 ### Sub-Account StackSet (`params-cxm-sub-accounts.json`)
 
@@ -39,6 +41,10 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `CXMExternalId` | Yes | — | External ID provided by CXM (same as root) |
 | `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
 | `ManagementAccountId` | Yes | — | Your 12-digit AWS Organizations management account ID |
+| `ManagementRegion` | No | `us-east-1` | Single region in which the global IAM roles are created |
+| `OrganizationId` | No | `""` | AWS Organizations root ID (`o-xxxxxxxxxx`). When set, the management account can only assume the asset crawler role from inside this organization (`aws:PrincipalOrgID`) |
+| `EnableScheduling` | No | `false` | Grant scheduling/scaling permissions (stop/start, resize) for FinOps actions |
+| `EnableSavingsModifications` | No | `true` | `false` gives the crawler read-only commitment access — it reports on Savings Plans/RIs but cannot purchase, modify or cancel them |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
 
 ### EKS Stack (inline parameters)
@@ -46,7 +52,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `ClusterName` | Yes | — | Name of the EKS cluster |
-| `PrincipalArn` | Yes | — | IAM role ARN of the CXM role (from root stack outputs, e.g. `arn:aws:iam::123456789012:role/cxm-organization-crawler`) |
+| `PrincipalArn` | Yes | — | IAM role ARN of the CXM role **in the cluster's own account** — in an Organization deployment that is `CxmAssetCrawlerRoleArn` from the sub-account StackSet instance in that account, not the management account's organization crawler |
 | `AccessScopeType` | No | `cluster` | `cluster` for full access, `namespace` to restrict |
 | `AccessScopeNamespaces` | No | `""` | Comma-separated namespaces (only when type is `namespace`) |
 | `KubernetesGroups` | No | `""` | Comma-separated Kubernetes groups for the access entry |
@@ -61,6 +67,16 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `VPCFlowLogsBucketName` | Yes | — | S3 bucket name storing centralized VPC Flow Logs |
 | `VPCFlowLogsBucketKmsKeyArn` | No | `""` | KMS key ARN if the Flow Logs bucket is encrypted |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
+
+### In-Place Query Stack (inline parameters, one per bucket)
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
+| `BucketName` | Yes | — | Name of the CloudTrail or VPC Flow Logs bucket to grant query access to |
+| `ObjectPrefix` | No | `AWSLogs` | Object key prefix the grant is narrowed to. No trailing `/` — one is added for you |
+| `KmsKeyArn` | No | `""` | KMS key ARN if the bucket is encrypted. Renders the key policy statement in the outputs |
+| `ManageBucketPolicy` | No | `false` | `true` makes the stack own the bucket policy, **replacing** whatever is attached. Only for a bucket dedicated to this integration |
 
 ## Deployment
 
@@ -186,7 +202,49 @@ aws cloudformation wait stack-create-complete \
   --profile org-network-logs
 ```
 
-### 6. Verify Deployment
+### 6. Grant In-Place Query Access (Optional)
+
+The reader roles above let CXM *list and fetch* objects. Querying a log bucket in place
+with Athena needs more: Athena reads S3 as the principal that submitted the query, not as
+the assumed reader role, so the role's identity policy never applies to the scan. The only
+grant that works is a policy on the bucket itself — and on the KMS key, if the bucket is
+encrypted.
+
+Deploy once per bucket (CloudTrail, VPC Flow Logs, …), **in the account and region that
+owns the bucket**:
+
+```bash
+aws cloudformation create-stack \
+  --stack-name CxmInPlaceQuery-<BUCKET_NAME> \
+  --template-body file://cxm-integration-aws-s3-inplace-query.yaml \
+  --parameters \
+    ParameterKey=CXMCustomerAccountId,ParameterValue=<CXM_ACCOUNT_ID> \
+    ParameterKey=BucketName,ParameterValue=<BUCKET_NAME> \
+    ParameterKey=ObjectPrefix,ParameterValue=AWSLogs \
+  --region <BUCKET_REGION>
+```
+
+By default the stack **creates nothing** — it renders the statements you need:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name CxmInPlaceQuery-<BUCKET_NAME> \
+  --query "Stacks[0].Outputs[?OutputKey=='BucketPolicyStatementsJson'].OutputValue" \
+  --output text \
+  --region <BUCKET_REGION>
+```
+
+Merge those statements into the bucket's existing policy, and — if you passed `KmsKeyArn` —
+merge `KmsKeyPolicyStatementJson` into the key policy.
+
+> **Why merge instead of apply?** CloudFormation's `AWS::S3::BucketPolicy` replaces the
+> entire bucket policy. CloudTrail and VPC Flow Logs buckets carry AWS log-delivery
+> statements; replacing them silently stops log delivery. Set
+> `ManageBucketPolicy=true` only for a bucket dedicated to this integration with no policy
+> of its own. CloudFormation cannot edit the policy of a pre-existing KMS key at all, so
+> the KMS statement is always a manual merge.
+
+### 7. Verify Deployment
 
 Retrieve the root stack outputs and confirm all resources were created:
 
