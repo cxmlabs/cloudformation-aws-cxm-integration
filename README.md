@@ -29,6 +29,8 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `CostAndUsageReportS3BucketName` | Yes | — | S3 bucket name storing your CUR data (bucket name only, not the ARN — e.g. `my-cur-bucket`) |
 | `CostAndUsageReportS3BucketKmsKeyArn` | No | `""` | KMS key ARN if your CUR bucket is encrypted (e.g. `arn:aws:kms:us-east-1:123456789012:key/...`) |
 | `CostAndUsageBucketRegion` | No | `us-east-1` | Region of the CUR S3 bucket |
+| `EnableInPlaceQueryGrant` | No | `false` | Set to `true` to render the in-place query statements as stack outputs. See [Querying logs in place](#querying-logs-in-place) |
+| `InPlaceQueryObjectPrefix` | No | `AWSLogs` | Object key prefix the in-place grant is narrowed to, no trailing slash. Set to your report prefix for a CUR bucket |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
 | `EnableSavingsModifications` | No | `true` | `false` gives the crawler read-only commitment access — it reports on Savings Plans/RIs but cannot purchase, modify or cancel them, and cannot write CUR report definitions. Use for a read-only proof of concept |
 
@@ -66,6 +68,8 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
 | `VPCFlowLogsBucketName` | Yes | — | S3 bucket name storing centralized VPC Flow Logs |
 | `VPCFlowLogsBucketKmsKeyArn` | No | `""` | KMS key ARN if the Flow Logs bucket is encrypted |
+| `EnableInPlaceQueryGrant` | No | `false` | Set to `true` to render the in-place query statements as stack outputs. See [Querying logs in place](#querying-logs-in-place) |
+| `InPlaceQueryObjectPrefix` | No | `AWSLogs` | Object key prefix the in-place grant is narrowed to, no trailing slash |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
 
 ### In-Place Query Stack (inline parameters, one per bucket)
@@ -262,6 +266,83 @@ Check that:
 - `ResourcesCreated` shows `All resources created (org crawler, CUR reader, notifications)`
 
 Share the outputs with CXM to complete the integration.
+
+## Querying logs in place
+
+CXM can analyse your logs **in place** — reading the objects straight out of your bucket instead of copying them into ours. Nothing leaves your account and you pay no duplicate storage.
+
+This needs a grant the reader roles above cannot provide. Athena reads S3 as the principal that submitted the query and cannot be handed an assumed-role session, so the cross-account role and its external ID never enter the read path. The bucket must grant access in its **own** policy — a resource policy — and, when the objects are encrypted with a customer managed key, the key must do the same in its key policy.
+
+### These templates render the statements, they do not apply them
+
+Set `EnableInPlaceQueryGrant=true` and the stack outputs `InPlaceQueryBucketPolicyStatements` (and `InPlaceQueryKmsKeyPolicyStatement`, when a KMS key ARN is set). **You merge them into your existing policies yourself.** No bucket or key policy resource is created, so turning the parameter on changes nothing in your account.
+
+That is deliberate. `AWS::S3::BucketPolicy` replaces the **whole** bucket policy and CloudFormation has no way to read the policy already on the bucket, so it cannot merge. CloudTrail and VPC Flow Logs buckets always carry AWS log-delivery statements (`cloudtrail.amazonaws.com`, `delivery.logs.amazonaws.com`); a managed bucket policy would silently delete them and stop your log delivery. CloudFormation likewise has no resource type for the policy of an existing KMS key.
+
+Read the statements out of the stack outputs:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name CxmIntegrationStack-FlowLogs \
+  --query "Stacks[0].Outputs[?starts_with(OutputKey, 'InPlaceQuery')]" \
+  --output text \
+  --region $FLOWLOGS_REGION
+```
+
+The bucket grant looks like this, with your account ID, bucket name and prefix already filled in:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CxMInPlaceGetObject",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::example-log-bucket/AWSLogs/*"
+    },
+    {
+      "Sid": "CxMInPlaceListBucket",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::example-log-bucket",
+      "Condition": { "StringLike": { "s3:prefix": "AWSLogs/*" } }
+    },
+    {
+      "Sid": "CxMInPlaceGetBucketLocation",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
+      "Action": "s3:GetBucketLocation",
+      "Resource": "arn:aws:s3:::example-log-bucket"
+    }
+  ]
+}
+```
+
+And the key grant:
+
+```json
+{
+  "Sid": "CxMInPlaceDecrypt",
+  "Effect": "Allow",
+  "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
+  "Action": ["kms:Decrypt", "kms:DescribeKey"],
+  "Resource": "*"
+}
+```
+
+> **Merge the KMS statement into the key's current policy — never replace it.** A key policy replaced without its administrative statements locks the key permanently: no rotation, no deletion and no further policy edit, by anyone, including you. Read the current policy first with `aws kms get-key-policy --key-id <KEY_ARN> --policy-name default`, add the statement to its `Statement` array, and put the whole document back.
+
+Four points to keep when you adapt these statements:
+
+- **Keep the three bucket statements separate.** `s3:GetBucketLocation` does not support the `s3:prefix` condition key, so folding it in with `s3:ListBucket` makes AWS reject the whole policy as `MalformedPolicy`. A rejected `put-bucket-policy` leaves the previous policy in place, which looks like success — always read the policy back afterwards.
+- **Do not add an `aws:CalledVia` condition.** Athena does not populate `aws:CalledVia` on its scan requests, so the condition denies the very queries you are enabling.
+- **The principal is the CXM account, not a role.** Access is narrowed by object prefix instead. Our submitting roles are named per tenant and per service, so naming them would break your policy every time one is renamed.
+- **`kms:GenerateDataKey` is not needed.** It is write-side only; in-place querying only ever decrypts.
+
+The same statements are produced by the Terraform onboarding module, so the two routes grant identical access.
 
 ## Updating
 

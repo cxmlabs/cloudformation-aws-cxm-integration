@@ -26,6 +26,18 @@ Parameters:
     Type: String
     Default: "us-east-1"
     Description: Region where the CUR S3 bucket lives. Deploy this stack to this region for full functionality.
+  # In-place query access
+  EnableInPlaceQueryGrant:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+    Description: Set to true to render the bucket and KMS key policy statements CXM needs to query the bucket in place. Rendering changes nothing in your account — the statements appear as stack outputs for you to merge into the bucket's existing policy yourself.
+  InPlaceQueryObjectPrefix:
+    Type: String
+    Default: AWSLogs
+    Description: Object key prefix the in-place query grant is narrowed to, without a trailing slash. Set this to your report prefix for a CUR bucket.
+    AllowedPattern: '^[A-Za-z0-9!_.*''()\-]+(/[A-Za-z0-9!_.*''()\-]+)*$'
+    ConstraintDescription: Must be an S3 key prefix with no leading or trailing slash (e.g. AWSLogs)
   # Prefix
   Prefix:
     Type: String
@@ -48,6 +60,8 @@ Conditions:
   isCostAndUsageBucketRegion: !Equals [!Ref AWS::Region, !Ref CostAndUsageBucketRegion]
   isCURKmsKeyArnSet: !Not [ !Equals [ !Ref CostAndUsageReportS3BucketKmsKeyArn, '' ] ]
   SavingsModificationsEnabled: !Equals [!Ref EnableSavingsModifications, "true"]
+  isInPlaceQueryGrantEnabled: !Equals [ !Ref EnableInPlaceQueryGrant, 'true' ]
+  isInPlaceQueryKmsGrantNeeded: !And [ !Condition isInPlaceQueryGrantEnabled, !Condition isCURKmsKeyArnSet ]
 
 Resources:
 
@@ -498,6 +512,51 @@ Outputs:
   CostAndUsageBucketRegion:
     Description: Cost and Usage Bucket region
     Value: !Ref CostAndUsageBucketRegion
+
+  # In-place query access. CloudFormation replaces the whole bucket policy and cannot read
+  # the existing one, so the statements are rendered for you to merge — no resource is created.
+  InPlaceQueryBucketPolicyStatements:
+    Condition: isInPlaceQueryGrantEnabled
+    Description: Bucket policy statements to merge into the bucket's existing policy so CXM can query it in place. Keep the three statements separate.
+    Value: !Sub |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "CxMInPlaceGetObject",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::${CostAndUsageReportS3BucketName}/${InPlaceQueryObjectPrefix}/*"
+          },
+          {
+            "Sid": "CxMInPlaceListBucket",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::${CostAndUsageReportS3BucketName}",
+            "Condition": { "StringLike": { "s3:prefix": "${InPlaceQueryObjectPrefix}/*" } }
+          },
+          {
+            "Sid": "CxMInPlaceGetBucketLocation",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:GetBucketLocation",
+            "Resource": "arn:aws:s3:::${CostAndUsageReportS3BucketName}"
+          }
+        ]
+      }
+  InPlaceQueryKmsKeyPolicyStatement:
+    Condition: isInPlaceQueryKmsGrantNeeded
+    Description: KMS key policy statement to merge into the encryption key's existing policy. Merge it — replacing a key policy without its administrative statements locks the key permanently.
+    Value: !Sub |
+      {
+        "Sid": "CxMInPlaceDecrypt",
+        "Effect": "Allow",
+        "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+        "Action": ["kms:Decrypt", "kms:DescribeKey"],
+        "Resource": "*"
+      }
 
   # Notification role
   CxmNotificationRoleArn:
