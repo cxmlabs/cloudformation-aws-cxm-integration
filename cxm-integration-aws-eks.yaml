@@ -9,9 +9,16 @@ Parameters:
     Description: Name of the EKS cluster to grant access to
   PrincipalArn:
     Type: String
-    Description: ARN of the CXM IAM role (organization-crawler or asset-crawler from stack outputs)
+    Description: >-
+      ARN of the CXM IAM role that exists IN THE CLUSTER'S OWN ACCOUNT — it is the identity
+      that reaches the Kubernetes API server. In an Organization deployment that is the
+      asset crawler (CxmAssetCrawlerRoleArn from the sub-account StackSet instance in this
+      account), NOT the management account's organization crawler: that role is only the
+      first hop of the assume-role chain, and granting it the access entry leaves the
+      crawler unauthorized at runtime. In a lone management account both roles live in the
+      same account, so either resolves correctly.
     AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
-    ConstraintDescription: Must be a valid IAM role ARN (e.g. arn:aws:iam::123456789012:role/cxm-organization-crawler)
+    ConstraintDescription: Must be a valid IAM role ARN (e.g. arn:aws:iam::123456789012:role/cxm-asset-crawler)
   AccessScopeType:
     Type: String
     Default: cluster

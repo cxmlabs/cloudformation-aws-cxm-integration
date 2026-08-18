@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CXM In-Place Query Access — grants CXM the S3 (and KMS) resource-policy permissions
+  needed to query a log bucket in place with Athena. Deploy once per bucket, in the
+  account and region that owns the bucket. Typical targets: the centralized CloudTrail
+  bucket and the centralized VPC Flow Logs bucket.
+
+  DEFAULT MODE IS OUTPUT-ONLY: the stack renders the statements to merge into your
+  existing bucket policy. Set ManageBucketPolicy to "true" only for a bucket dedicated to
+  this integration — it REPLACES the whole bucket policy.
+
+# WHY A RESOURCE POLICY: Athena reads S3 as the principal that submitted the query and
+# cannot be handed an assumed-role session, so the identity policy on the CXM reader role
+# (cxm-integration-aws-flowlogs.yaml, or the CUR reader in the root stack) never applies to
+# the scan path. A policy on the bucket itself — and on the KMS key, when the bucket is
+# encrypted — is the only grant that works.
+#
+# The principal is the CXM account root, not a role name: submitting roles are named per
+# tenant and per service, so naming them would break the policy on any rename. Access is
+# narrowed by object prefix instead.
+#
+# WHY OUTPUT-ONLY BY DEFAULT: AWS::S3::BucketPolicy replaces the whole bucket policy, and
+# CloudTrail / VPC Flow Logs buckets carry AWS log-delivery statements that must survive.
+
+Parameters:
+  CXMCustomerAccountId:
+    Type: String
+    Description: 12-digit CXM AWS account ID provided by CXM (the account allowed to query the bucket)
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: Must be a 12-digit AWS account ID
+  BucketName:
+    Type: String
+    Description: Name of the log bucket to grant in-place query access to (bucket name only, not the ARN)
+    AllowedPattern: '^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$'
+    ConstraintDescription: "Must be an S3 bucket name (not an ARN). Example: my-cloudtrail-bucket"
+  ObjectPrefix:
+    Type: String
+    Default: AWSLogs
+    Description: >-
+      Object key prefix the grant is narrowed to. A trailing "/" is added automatically,
+      so pass "AWSLogs", not "AWSLogs/". CloudTrail and VPC Flow Logs both write under
+      "AWSLogs" by default.
+    AllowedPattern: '^[^/]$|^[^/].*[^/]$'
+    ConstraintDescription: Must not be empty and must not start or end with a "/"
+  KmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional — ARN of the KMS key encrypting the bucket. When set, the KMS key policy
+      statement is rendered in the outputs for you to merge into the key policy.
+      CloudFormation cannot edit the policy of a pre-existing KMS key, so this is always
+      a manual merge.
+    AllowedPattern: '^(arn:aws:kms:[a-z0-9-]+:\d{12}:key/(mrk-)?[a-f0-9-]+)?$'
+    ConstraintDescription: Must be a valid KMS key ARN or empty
+  ManageBucketPolicy:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >-
+      DANGEROUS on a shared log bucket. "true" makes this stack own the bucket policy,
+      REPLACING whatever policy is currently attached — including the AWS log-delivery
+      statements CloudTrail and VPC Flow Logs need to keep writing. Only set it for a
+      bucket dedicated to this integration with no policy of its own. Leave "false" to
+      take the statements from the outputs and merge them yourself.
+
+Conditions:
+  ManageBucketPolicyEnabled: !Equals [!Ref ManageBucketPolicy, "true"]
+  isKmsKeyArnSet: !Not [!Equals [!Ref KmsKeyArn, '']]
+
+Resources:
+  # Three separate statements are mandatory: s3:GetBucketLocation does not support the
+  # s3:prefix condition key, so folding it in with s3:ListBucket is rejected as
+  # MalformedPolicy. Do NOT add an aws:CalledVia condition: Athena does not populate
+  # CalledVia on its scan requests, so the condition would deny Athena itself.
+  CxmInPlaceQueryBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: ManageBucketPolicyEnabled
+    Properties:
+      Bucket: !Ref BucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CxMInPlaceGetObject
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${BucketName}/${ObjectPrefix}/*"
+          - Sid: CxMInPlaceListBucket
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
+            Action: s3:ListBucket
+            Resource: !Sub "arn:aws:s3:::${BucketName}"
+            Condition:
+              StringLike:
+                s3:prefix: !Sub "${ObjectPrefix}/*"
+          - Sid: CxMInPlaceGetBucketLocation
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
+            Action: s3:GetBucketLocation
+            Resource: !Sub "arn:aws:s3:::${BucketName}"
+
+Outputs:
+  BucketName:
+    Description: Bucket the in-place query grant applies to
+    Value: !Ref BucketName
+  ObjectPrefix:
+    Description: Object key prefix the grant is narrowed to
+    Value: !Sub "${ObjectPrefix}/"
+  BucketPolicyManaged:
+    Description: Whether this stack owns the bucket policy
+    Value: !If
+      - ManageBucketPolicyEnabled
+      - "YES — this stack owns the bucket policy"
+      - "NO — merge BucketPolicyStatementsJson into the bucket policy yourself"
+
+  BucketPolicyStatementsJson:
+    Description: >-
+      Bucket policy statements granting CXM in-place query access. Merge these into the
+      bucket's existing policy when ManageBucketPolicy is "false".
+    Value: !Sub |
+      [{"Sid":"CxMInPlaceGetObject","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::${BucketName}/${ObjectPrefix}/*"},{"Sid":"CxMInPlaceListBucket","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:ListBucket","Resource":"arn:aws:s3:::${BucketName}","Condition":{"StringLike":{"s3:prefix":"${ObjectPrefix}/*"}}},{"Sid":"CxMInPlaceGetBucketLocation","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:GetBucketLocation","Resource":"arn:aws:s3:::${BucketName}"}]
+
+  # kms:GenerateDataKey is write-side only and deliberately excluded. The identity-policy
+  # kms:Decrypt on the reader role does not substitute for this: the query submitter is
+  # not the role that policy is attached to.
+  KmsKeyPolicyStatementJson:
+    Condition: isKmsKeyArnSet
+    Description: >-
+      KMS key policy statement granting CXM decrypt access. Merge this into the existing
+      policy of KmsKeyArn — do not replace the policy, or the key becomes unmanageable.
+    Value: !Sub |
+      {"Sid":"CxMInPlaceDecrypt","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":["kms:Decrypt","kms:DescribeKey"],"Resource":"*"}
