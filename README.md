@@ -9,7 +9,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `cxm-integration-aws-root.yaml` | Stack | Deploys to the management account: organization crawler role, CUR reader role, and EventBridge notification rules |
 | `cxm-integration-aws-sub-account.yaml` | StackSet | Deploys to member accounts: asset crawler role and EventBridge CloudFormation notifier |
 | `cxm-integration-aws-eks.yaml` | Stack | Optional — Grants CXM read-only access to an EKS cluster via Access Entries (deploy once per cluster) |
-| `cxm-integration-aws-flowlogs.yaml` | Stack | Optional — Deploys to the account/region hosting centralized VPC Flow Logs: reader role and EventBridge notifications |
+| `cxm-integration-aws-log-source.yaml` | Stack | Optional — Deploys to the account/region hosting a centralized log bucket (VPC Flow Logs or CloudTrail): reader role and EventBridge notifications. **One stack per bucket** |
 | `cxm-integration-aws-s3-inplace-query.yaml` | Stack | Optional — Renders (or applies) the bucket/KMS resource-policy statements that let CXM query a CloudTrail or VPC Flow Logs bucket in place with Athena (deploy once per bucket) |
 
 ## Prerequisites
@@ -60,14 +60,15 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `KubernetesGroups` | No | `""` | Comma-separated Kubernetes groups for the access entry |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
 
-### VPC Flow Logs Stack (`params-cxm-flowlogs.json`)
+### Log Source Stack (`params-cxm-log-source.json`) — one per bucket
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `CXMExternalId` | Yes | — | External ID provided by CXM (same as root) |
 | `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
-| `VPCFlowLogsBucketName` | Yes | — | S3 bucket name storing centralized VPC Flow Logs |
-| `VPCFlowLogsBucketKmsKeyArn` | No | `""` | KMS key ARN if the Flow Logs bucket is encrypted |
+| `LogSource` | No | `flowlogs` | `flowlogs` or `cloudtrail`. Names every resource the stack creates — see [One stack per log bucket](#one-stack-per-log-bucket) |
+| `LogSourceBucketName` | Yes | — | S3 bucket name storing the centralized logs |
+| `LogSourceBucketKmsKeyArn` | No | `""` | KMS key ARN if the bucket is encrypted |
 | `EnableInPlaceQueryGrant` | No | `false` | Set to `true` to render the in-place query statements as stack outputs. See [Querying logs in place](#querying-logs-in-place) |
 | `InPlaceQueryObjectPrefix` | No | `AWSLogs` | Object key prefix the in-place grant is narrowed to, no trailing slash |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
@@ -182,29 +183,59 @@ aws cloudformation create-stack \
 >   --access-config authenticationMode=API_AND_CONFIG_MAP
 > ```
 
-### 5. Deploy VPC Flow Logs (Optional)
+### 5. Deploy Log Sources (Optional)
 
-If you have centralized VPC Flow Logs in an S3 bucket, deploy `cxm-integration-aws-flowlogs.yaml` as a separate stack **in the account and region where the Flow Logs bucket is located**. This may be a different account/region from the management account.
+#### One stack per log bucket
+
+A log source stack grants read on **one** bucket and watches **one** bucket, so centralized VPC
+Flow Logs and centralized CloudTrail get a stack each — even when both buckets live in the same
+account. `LogSource` names everything the stack creates, so the two never collide and the role
+name says which bucket it reads:
+
+| `LogSource` | Reader role | Notification role | EventBridge rule |
+|-------------|-------------|-------------------|------------------|
+| `flowlogs` | `<Prefix>-flowlogs-reader` | `<Prefix>-flowlogs-notification` | `<Prefix>-flowlogs-bucket-change-notifier` |
+| `cloudtrail` | `<Prefix>-cloudtrail-reader` | `<Prefix>-cloudtrail-notification` | `<Prefix>-cloudtrail-bucket-change-notifier` |
+
+CXM is configured with these exact role names per log source, so deploying the wrong `LogSource`
+against a bucket produces a role CXM will not look for. Name the stacks to match
+(`CxmIntegrationStack-FlowLogs`, `CxmIntegrationStack-CloudTrail`).
+
+Deploy **in the account and region where the bucket is located** — often neither is the
+management account.
 
 ```bash
-cp params-cxm-flowlogs-example.json params-cxm-flowlogs.json
-# Edit params-cxm-flowlogs.json with your values
+cp params-cxm-log-source-example.json params-cxm-log-source.json
+# Edit params-cxm-log-source.json with your values, including LogSource
 
-FLOWLOGS_REGION=eu-west-1  # Change to your Flow Logs bucket region
+LOG_REGION=eu-west-1  # Change to your log bucket's region
 
 aws cloudformation create-stack \
   --stack-name CxmIntegrationStack-FlowLogs \
-  --template-body file://cxm-integration-aws-flowlogs.yaml \
-  --parameters file://params-cxm-flowlogs.json \
+  --template-body file://cxm-integration-aws-log-source.yaml \
+  --parameters file://params-cxm-log-source.json \
   --capabilities CAPABILITY_NAMED_IAM \
-  --region $FLOWLOGS_REGION \
-  --profile org-network-logs  # Change to the Flow Logs account profile
+  --region $LOG_REGION \
+  --profile org-network-logs  # Change to the log bucket account profile
 
 aws cloudformation wait stack-create-complete \
   --stack-name CxmIntegrationStack-FlowLogs \
-  --region $FLOWLOGS_REGION \
+  --region $LOG_REGION \
   --profile org-network-logs
 ```
+
+Repeat with `LogSource=cloudtrail`, the CloudTrail bucket name and
+`--stack-name CxmIntegrationStack-CloudTrail` for the CloudTrail bucket.
+
+> **The EventBridge rule needs notifications enabled on the bucket.** S3 emits nothing to
+> EventBridge by default, so the rule this stack creates never fires until you turn it on:
+>
+> ```bash
+> aws s3api put-bucket-notification-configuration \
+>   --bucket <LOG_BUCKET> \
+>   --notification-configuration '{"EventBridgeConfiguration":{}}' \
+>   --region $LOG_REGION --profile org-network-logs
+> ```
 
 ### 6. Grant In-Place Query Access (Optional)
 
@@ -286,7 +317,7 @@ aws cloudformation describe-stacks \
   --stack-name CxmIntegrationStack-FlowLogs \
   --query "Stacks[0].Outputs[?starts_with(OutputKey, 'InPlaceQuery')]" \
   --output text \
-  --region $FLOWLOGS_REGION
+  --region $LOG_REGION
 ```
 
 The bucket grant looks like this, with your account ID, bucket name and prefix already filled in:

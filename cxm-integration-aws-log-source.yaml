@@ -1,8 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  CXM Integration - VPC Flow Logs Reader.
-  Deploy this stack in the account and region where the centralized VPC Flow Logs S3 bucket is located.
+  CXM Integration - Log Source Reader.
+  Deploy this stack in the account and region where a centralized log bucket is located.
+  One stack per bucket: LogSource names the role after the log type, so a VPC Flow Logs
+  bucket and a CloudTrail bucket in the same account get distinct, self-describing roles.
   This may be a different account and region from the management account.
+
+# WHY ONE STACK PER BUCKET: the reader role is granted s3:GetObject on exactly one bucket, and
+# the EventBridge rule matches exactly one bucket name. Pointing one role at several buckets
+# would widen the grant and make the notification stream ambiguous on the CXM side.
 
 Parameters:
   # CXM Accounts
@@ -12,14 +18,24 @@ Parameters:
   CXMCustomerAccountId:
     Type: String
     Description: Account ID of the instance set up for this deployment
-  # Flow Logs Bucket
-  VPCFlowLogsBucketName:
+  # Log source
+  LogSource:
     Type: String
-    Description: Name of the S3 bucket storing centralized VPC Flow Logs
-  VPCFlowLogsBucketKmsKeyArn:
+    Default: flowlogs
+    AllowedValues: ['flowlogs', 'cloudtrail']
+    Description: >-
+      Type of log stored in this bucket. Names every resource the stack creates, so the reader
+      role reads "<Prefix>-flowlogs-reader" or "<Prefix>-cloudtrail-reader" — CXM is configured
+      with that exact role name per log source.
+  LogSourceBucketName:
+    Type: String
+    Description: Name of the S3 bucket storing the centralized logs (bucket name only, not the ARN)
+    AllowedPattern: '^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$'
+    ConstraintDescription: "Must be an S3 bucket name (not an ARN). Example: my-flowlogs-bucket"
+  LogSourceBucketKmsKeyArn:
     Type: String
     Default: ''
-    Description: Optional - ARN of the KMS key used to encrypt VPC Flow Logs data in S3.
+    Description: Optional - ARN of the KMS key used to encrypt the logs in S3.
   # In-place query access
   EnableInPlaceQueryGrant:
     Type: String
@@ -43,7 +59,7 @@ Parameters:
     Description: Role name suffix
 
 Conditions:
-  isKmsKeyArnSet: !Not [ !Equals [ !Ref VPCFlowLogsBucketKmsKeyArn, '' ] ]
+  isKmsKeyArnSet: !Not [ !Equals [ !Ref LogSourceBucketKmsKeyArn, '' ] ]
   isInPlaceQueryGrantEnabled: !Equals [ !Ref EnableInPlaceQueryGrant, 'true' ]
   isInPlaceQueryKmsGrantNeeded: !And [ !Condition isInPlaceQueryGrantEnabled, !Condition isKmsKeyArnSet ]
 
@@ -51,13 +67,18 @@ Resources:
 
   ################################################################
   #
-  # VPC Flow Logs Reader
+  # Log Source Reader
+  #
+  # The CxmFlowLogs* logical ids are frozen, not stale. Renaming a logical id makes
+  # CloudFormation create the replacement before deleting the original, and both carry the same
+  # explicit RoleName — so an existing stack fails the update with "already exists" and rolls
+  # back. The AWS-visible names come from LogSource and are correct per log type.
   #
   ################################################################
   CxmFlowLogsReaderRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${Prefix}-flowlogs-reader${RoleSuffix}'
+      RoleName: !Sub '${Prefix}-${LogSource}-reader${RoleSuffix}'
       MaxSessionDuration: 43200
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -75,7 +96,7 @@ Resources:
   CxmFlowLogsReaderPolicy:
     Type: AWS::IAM::Policy
     Properties:
-      PolicyName: !Sub '${Prefix}-flowlogs-reader${RoleSuffix}-policy'
+      PolicyName: !Sub '${Prefix}-${LogSource}-reader${RoleSuffix}-policy'
       Roles:
         - !Ref 'CxmFlowLogsReaderRole'
       PolicyDocument:
@@ -84,21 +105,21 @@ Resources:
           - Effect: Allow
             Action:
               - "s3:ListBucket"
-            Resource: !Sub "arn:aws:s3:::${VPCFlowLogsBucketName}"
+            Resource: !Sub "arn:aws:s3:::${LogSourceBucketName}"
           - Effect: Allow
             Action:
               - "s3:GetObject"
-            Resource: !Sub "arn:aws:s3:::${VPCFlowLogsBucketName}/*"
+            Resource: !Sub "arn:aws:s3:::${LogSourceBucketName}/*"
+          # No kms:EncryptionContext condition: S3 sets the context to the *object* ARN, so a
+          # bucket-ARN equality test never matches and silently kills the grant. The Resource
+          # is already pinned to the one key, which is the scoping that matters.
           - "Fn::If":
             - isKmsKeyArnSet
             - Effect: Allow
               Action:
                 - "kms:Decrypt"
-                - "kms:GenerateDataKey"
-              Resource: !Ref VPCFlowLogsBucketKmsKeyArn
-              Condition:
-                StringEquals:
-                  kms:EncryptionContext: !Sub "arn:aws:s3:::${VPCFlowLogsBucketName}"
+                - "kms:DescribeKey"
+              Resource: !Ref LogSourceBucketKmsKeyArn
             - !Ref AWS::NoValue
 
   ################################################################
@@ -109,7 +130,7 @@ Resources:
   CxmFlowLogsNotificationRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Prefix}-flowlogs-notification${RoleSuffix}"
+      RoleName: !Sub "${Prefix}-${LogSource}-notification${RoleSuffix}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -121,7 +142,7 @@ Resources:
   CxmFlowLogsNotificationRolePolicy:
     Type: AWS::IAM::Policy
     Properties:
-      PolicyName: !Sub "${Prefix}-flowlogs-notification${RoleSuffix}-policy"
+      PolicyName: !Sub "${Prefix}-${LogSource}-notification${RoleSuffix}-policy"
       Roles:
         - !Ref CxmFlowLogsNotificationRole
       PolicyDocument:
@@ -132,11 +153,14 @@ Resources:
             Resource:
               - !Sub "arn:aws:events:*:${CXMCustomerAccountId}:event-bus/data-plane*"
 
+  # Needs EventBridge notifications enabled on the bucket
+  # (aws s3api put-bucket-notification-configuration --notification-configuration '{"EventBridgeConfiguration":{}}').
+  # Without that the bucket emits nothing and this rule never fires.
   CxmFlowLogsBucketEventRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub "${Prefix}-flowlogs-bucket-change-notifier${RoleSuffix}"
-      Description: "Notifies when changes happen to files in the VPC Flow Logs S3 bucket"
+      Name: !Sub "${Prefix}-${LogSource}-bucket-change-notifier${RoleSuffix}"
+      Description: !Sub "Notifies when changes happen to files in the ${LogSource} S3 bucket"
       EventPattern:
         source:
           - "aws.s3"
@@ -146,7 +170,7 @@ Resources:
         detail:
           bucket:
             name:
-              - !Ref VPCFlowLogsBucketName
+              - !Ref LogSourceBucketName
       Targets:
         - Id: "SendToDataPlaneBus"
           Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/data-plane"
@@ -165,9 +189,12 @@ Outputs:
   RoleSuffix:
     Description: Role name suffix
     Value: !Ref RoleSuffix
-  VPCFlowLogsBucketName:
-    Description: Name of the S3 bucket storing VPC Flow Logs
-    Value: !Ref VPCFlowLogsBucketName
+  LogSource:
+    Description: Type of log stored in this bucket
+    Value: !Ref LogSource
+  LogSourceBucketName:
+    Description: Name of the S3 bucket storing the logs
+    Value: !Ref LogSourceBucketName
 
   # In-place query access. CloudFormation replaces the whole bucket policy and cannot read
   # the existing one, so the statements are rendered for you to merge — no resource is created.
@@ -183,14 +210,14 @@ Outputs:
             "Effect": "Allow",
             "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
             "Action": "s3:GetObject",
-            "Resource": "arn:aws:s3:::${VPCFlowLogsBucketName}/${InPlaceQueryObjectPrefix}/*"
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}/${InPlaceQueryObjectPrefix}/*"
           },
           {
             "Sid": "CxMInPlaceListBucket",
             "Effect": "Allow",
             "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
             "Action": "s3:ListBucket",
-            "Resource": "arn:aws:s3:::${VPCFlowLogsBucketName}",
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}",
             "Condition": { "StringLike": { "s3:prefix": "${InPlaceQueryObjectPrefix}/*" } }
           },
           {
@@ -198,7 +225,7 @@ Outputs:
             "Effect": "Allow",
             "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
             "Action": "s3:GetBucketLocation",
-            "Resource": "arn:aws:s3:::${VPCFlowLogsBucketName}"
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}"
           }
         ]
       }
@@ -214,10 +241,10 @@ Outputs:
         "Resource": "*"
       }
 
-  # Flow Logs Reader
-  CxmFlowLogsReaderRoleArn:
-    Description: ARN of the VPC Flow Logs Reader IAM Role
+  # Log Source Reader
+  CxmLogSourceReaderRoleArn:
+    Description: ARN of the Log Source Reader IAM Role
     Value: !GetAtt CxmFlowLogsReaderRole.Arn
-  CxmFlowLogsReaderRoleId:
-    Description: Id of the VPC Flow Logs Reader IAM Role
+  CxmLogSourceReaderRoleId:
+    Description: Id of the Log Source Reader IAM Role
     Value: !GetAtt CxmFlowLogsReaderRole.RoleId

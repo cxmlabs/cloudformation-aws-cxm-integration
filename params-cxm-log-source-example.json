@@ -5,10 +5,13 @@
   {"ParameterKey": "CXMExternalId",
   "ParameterValue": "my-cxm-external-id"},
 
-  {"ParameterKey": "VPCFlowLogsBucketName",
+  {"ParameterKey": "LogSource",
+  "ParameterValue": "flowlogs"},
+
+  {"ParameterKey": "LogSourceBucketName",
   "ParameterValue": "my-centralized-flowlogs-bucket"},
 
-  {"ParameterKey": "VPCFlowLogsBucketKmsKeyArn",
+  {"ParameterKey": "LogSourceBucketKmsKeyArn",
   "ParameterValue": ""},
 
   {"ParameterKey": "RoleSuffix",
