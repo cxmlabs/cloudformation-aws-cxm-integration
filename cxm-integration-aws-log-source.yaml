@@ -69,8 +69,13 @@ Resources:
   #
   # Log Source Reader
   #
+  # The CxmFlowLogs* logical ids are frozen, not stale. Renaming a logical id makes
+  # CloudFormation create the replacement before deleting the original, and both carry the same
+  # explicit RoleName — so an existing stack fails the update with "already exists" and rolls
+  # back. The AWS-visible names come from LogSource and are correct per log type.
+  #
   ################################################################
-  CxmLogSourceReaderRole:
+  CxmFlowLogsReaderRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub '${Prefix}-${LogSource}-reader${RoleSuffix}'
@@ -88,12 +93,12 @@ Resources:
               StringEquals:
                 sts:ExternalId: !Sub '${CXMExternalId}'
 
-  CxmLogSourceReaderPolicy:
+  CxmFlowLogsReaderPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: !Sub '${Prefix}-${LogSource}-reader${RoleSuffix}-policy'
       Roles:
-        - !Ref 'CxmLogSourceReaderRole'
+        - !Ref 'CxmFlowLogsReaderRole'
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -122,7 +127,7 @@ Resources:
   # Notifications
   #
   ################################################################
-  CxmLogSourceNotificationRole:
+  CxmFlowLogsNotificationRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub "${Prefix}-${LogSource}-notification${RoleSuffix}"
@@ -134,12 +139,12 @@ Resources:
             Principal:
               Service: "events.amazonaws.com"
 
-  CxmLogSourceNotificationRolePolicy:
+  CxmFlowLogsNotificationRolePolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: !Sub "${Prefix}-${LogSource}-notification${RoleSuffix}-policy"
       Roles:
-        - !Ref CxmLogSourceNotificationRole
+        - !Ref CxmFlowLogsNotificationRole
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -151,7 +156,7 @@ Resources:
   # Needs EventBridge notifications enabled on the bucket
   # (aws s3api put-bucket-notification-configuration --notification-configuration '{"EventBridgeConfiguration":{}}').
   # Without that the bucket emits nothing and this rule never fires.
-  CxmLogSourceBucketEventRule:
+  CxmFlowLogsBucketEventRule:
     Type: AWS::Events::Rule
     Properties:
       Name: !Sub "${Prefix}-${LogSource}-bucket-change-notifier${RoleSuffix}"
@@ -169,7 +174,7 @@ Resources:
       Targets:
         - Id: "SendToDataPlaneBus"
           Arn: !Sub "arn:aws:events:${AWS::Region}:${CXMCustomerAccountId}:event-bus/data-plane"
-          RoleArn: !GetAtt CxmLogSourceNotificationRole.Arn
+          RoleArn: !GetAtt CxmFlowLogsNotificationRole.Arn
 
 ################################################################
 #
@@ -239,7 +244,7 @@ Outputs:
   # Log Source Reader
   CxmLogSourceReaderRoleArn:
     Description: ARN of the Log Source Reader IAM Role
-    Value: !GetAtt CxmLogSourceReaderRole.Arn
+    Value: !GetAtt CxmFlowLogsReaderRole.Arn
   CxmLogSourceReaderRoleId:
     Description: Id of the Log Source Reader IAM Role
-    Value: !GetAtt CxmLogSourceReaderRole.RoleId
+    Value: !GetAtt CxmFlowLogsReaderRole.RoleId
