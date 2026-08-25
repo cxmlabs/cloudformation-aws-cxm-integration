@@ -66,6 +66,8 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 |-----------|----------|---------|-------------|
 | `CXMExternalId` | Yes | — | External ID provided by CXM (same as root) |
 | `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
+| `AdditionalCXMCustomerAccountId` | No | `""` | Second CXM account that also reads this bucket (e.g. staging alongside production). See [Several CXM environments reading one bucket](#several-cxm-environments-reading-one-bucket) |
+| `AdditionalCXMExternalId` | No | `""` | External ID of that second account. Required whenever `AdditionalCXMCustomerAccountId` is set |
 | `LogSource` | No | `flowlogs` | `flowlogs` or `cloudtrail`. Names every resource the stack creates — see [One stack per log bucket](#one-stack-per-log-bucket) |
 | `LogSourceBucketName` | Yes | — | S3 bucket name storing the centralized logs |
 | `LogSourceBucketKmsKeyArn` | No | `""` | KMS key ARN if the bucket is encrypted |
@@ -78,6 +80,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID provided by CXM (same as root) |
+| `AdditionalCXMCustomerAccountId` | No | `""` | Second CXM account that also queries this bucket. See [Several CXM environments reading one bucket](#several-cxm-environments-reading-one-bucket) |
 | `BucketName` | Yes | — | Name of the CloudTrail or VPC Flow Logs bucket to grant query access to |
 | `ObjectPrefix` | No | `AWSLogs` | Object key prefix the grant is narrowed to. No trailing `/` — one is added for you |
 | `KmsKeyArn` | No | `""` | KMS key ARN if the bucket is encrypted. Renders the key policy statement in the outputs |
@@ -327,14 +330,14 @@ The bucket grant looks like this, with your account ID, bucket name and prefix a
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "CxMInPlaceGetObject",
+      "Sid": "CxMInPlaceGetObject000000000000",
       "Effect": "Allow",
       "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
       "Action": "s3:GetObject",
       "Resource": "arn:aws:s3:::example-log-bucket/AWSLogs/*"
     },
     {
-      "Sid": "CxMInPlaceListBucket",
+      "Sid": "CxMInPlaceListBucket000000000000",
       "Effect": "Allow",
       "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
       "Action": "s3:ListBucket",
@@ -342,7 +345,7 @@ The bucket grant looks like this, with your account ID, bucket name and prefix a
       "Condition": { "StringLike": { "s3:prefix": "AWSLogs/*" } }
     },
     {
-      "Sid": "CxMInPlaceGetBucketLocation",
+      "Sid": "CxMInPlaceGetBucketLocation000000000000",
       "Effect": "Allow",
       "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
       "Action": "s3:GetBucketLocation",
@@ -356,7 +359,7 @@ And the key grant:
 
 ```json
 {
-  "Sid": "CxMInPlaceDecrypt",
+  "Sid": "CxMInPlaceDecrypt000000000000",
   "Effect": "Allow",
   "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
   "Action": ["kms:Decrypt", "kms:DescribeKey"],
@@ -372,6 +375,20 @@ Four points to keep when you adapt these statements:
 - **Do not add an `aws:CalledVia` condition.** Athena does not populate `aws:CalledVia` on its scan requests, so the condition denies the very queries you are enabling.
 - **The principal is the CXM account, not a role.** Access is narrowed by object prefix instead. Our submitting roles are named per tenant and per service, so naming them would break your policy every time one is renamed.
 - **`kms:GenerateDataKey` is not needed.** It is write-side only; in-place querying only ever decrypts.
+- **Keep the account id in each `Sid`.** It is what lets a second CXM environment's statements sit alongside these. S3 does accept two statements sharing a `Sid`, but nothing can tell them apart afterwards, so revoking one reader would mean rewriting the other's grant.
+
+### Several CXM environments reading one bucket
+
+CXM may read the same bucket from more than one account — a staging environment alongside production, for example. Pass the second one:
+
+```bash
+    ParameterKey=AdditionalCXMCustomerAccountId,ParameterValue=<SECOND_CXM_ACCOUNT_ID> \
+    ParameterKey=AdditionalCXMExternalId,ParameterValue=<SECOND_EXTERNAL_ID> \
+```
+
+The reader role then trusts both accounts — one trust statement each, because a single `StringEquals` holding two external IDs is an OR that would let either account in with either ID — and the rendered statements cover both readers, `Sid`-suffixed per account.
+
+`AdditionalCXMExternalId` is mandatory once the account is set: the stack refuses to deploy without it rather than render a trust statement conditioned on an empty external ID, which nothing could satisfy. More than two readers needs the Terraform module, which takes a list.
 
 The same statements are produced by the Terraform onboarding module, so the two routes grant identical access.
 

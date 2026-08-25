@@ -18,6 +18,19 @@ Parameters:
   CXMCustomerAccountId:
     Type: String
     Description: Account ID of the instance set up for this deployment
+  AdditionalCXMCustomerAccountId:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional - a second CXM account that also reads this bucket (for example a staging
+      environment alongside production). Adds a trust statement on the reader role and a
+      second in-place statement set. More than two readers needs the Terraform module.
+    AllowedPattern: '^(\d{12})?$'
+    ConstraintDescription: Must be a 12-digit AWS account ID or empty
+  AdditionalCXMExternalId:
+    Type: String
+    Default: ''
+    Description: Optional - external ID of the second CXM account. Required when AdditionalCXMCustomerAccountId is set; external IDs are per CXM environment.
   # Log source
   LogSource:
     Type: String
@@ -58,8 +71,18 @@ Parameters:
     Default: ""
     Description: Role name suffix
 
+# An additional reader with no external ID would render a StringEquals on "" — a condition
+# nothing can satisfy, so the trust statement would look present and grant nothing.
+Rules:
+  AdditionalReaderNeedsExternalId:
+    RuleCondition: !Not [ !Equals [ !Ref AdditionalCXMCustomerAccountId, '' ] ]
+    Assertions:
+      - Assert: !Not [ !Equals [ !Ref AdditionalCXMExternalId, '' ] ]
+        AssertDescription: AdditionalCXMExternalId is required when AdditionalCXMCustomerAccountId is set.
+
 Conditions:
   isKmsKeyArnSet: !Not [ !Equals [ !Ref LogSourceBucketKmsKeyArn, '' ] ]
+  hasAdditionalReader: !Not [ !Equals [ !Ref AdditionalCXMCustomerAccountId, '' ] ]
   isInPlaceQueryGrantEnabled: !Equals [ !Ref EnableInPlaceQueryGrant, 'true' ]
   isInPlaceQueryKmsGrantNeeded: !And [ !Condition isInPlaceQueryGrantEnabled, !Condition isKmsKeyArnSet ]
 
@@ -92,6 +115,20 @@ Resources:
             Condition:
               StringEquals:
                 sts:ExternalId: !Sub '${CXMExternalId}'
+          # A statement per reader, not one statement with two external IDs: StringEquals
+          # with several values is an OR, which would let either reader in with either id.
+          - "Fn::If":
+            - hasAdditionalReader
+            - Effect: Allow
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
+              Principal:
+                AWS: !Sub "arn:aws:iam::${AdditionalCXMCustomerAccountId}:root"
+              Condition:
+                StringEquals:
+                  sts:ExternalId: !Sub '${AdditionalCXMExternalId}'
+            - !Ref AWS::NoValue
 
   CxmFlowLogsReaderPolicy:
     Type: AWS::IAM::Policy
@@ -200,20 +237,22 @@ Outputs:
   # the existing one, so the statements are rendered for you to merge — no resource is created.
   InPlaceQueryBucketPolicyStatements:
     Condition: isInPlaceQueryGrantEnabled
-    Description: Bucket policy statements to merge into the bucket's existing policy so CXM can query it in place. Keep the three statements separate.
-    Value: !Sub |
-      {
-        "Version": "2012-10-17",
-        "Statement": [
+    Description: Bucket policy statements to merge into the bucket's existing policy so CXM can query it in place. Keep the statements separate, and keep the account id in each Sid — S3 accepts duplicate Sids but nothing can tell such statements apart afterwards, so the suffix is what lets a second reader's statements merge alongside these and be revoked independently.
+    Value: !If
+      - hasAdditionalReader
+      - !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
           {
-            "Sid": "CxMInPlaceGetObject",
+            "Sid": "CxMInPlaceGetObject${CXMCustomerAccountId}",
             "Effect": "Allow",
             "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
             "Action": "s3:GetObject",
             "Resource": "arn:aws:s3:::${LogSourceBucketName}/${InPlaceQueryObjectPrefix}/*"
           },
           {
-            "Sid": "CxMInPlaceListBucket",
+            "Sid": "CxMInPlaceListBucket${CXMCustomerAccountId}",
             "Effect": "Allow",
             "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
             "Action": "s3:ListBucket",
@@ -221,25 +260,96 @@ Outputs:
             "Condition": { "StringLike": { "s3:prefix": "${InPlaceQueryObjectPrefix}/*" } }
           },
           {
-            "Sid": "CxMInPlaceGetBucketLocation",
+            "Sid": "CxMInPlaceGetBucketLocation${CXMCustomerAccountId}",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:GetBucketLocation",
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}"
+          },
+          {
+            "Sid": "CxMInPlaceGetObject${AdditionalCXMCustomerAccountId}",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${AdditionalCXMCustomerAccountId}:root" },
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}/${InPlaceQueryObjectPrefix}/*"
+          },
+          {
+            "Sid": "CxMInPlaceListBucket${AdditionalCXMCustomerAccountId}",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${AdditionalCXMCustomerAccountId}:root" },
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}",
+            "Condition": { "StringLike": { "s3:prefix": "${InPlaceQueryObjectPrefix}/*" } }
+          },
+          {
+            "Sid": "CxMInPlaceGetBucketLocation${AdditionalCXMCustomerAccountId}",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${AdditionalCXMCustomerAccountId}:root" },
+            "Action": "s3:GetBucketLocation",
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}"
+          }
+          ]
+        }
+      - !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+          {
+            "Sid": "CxMInPlaceGetObject${CXMCustomerAccountId}",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}/${InPlaceQueryObjectPrefix}/*"
+          },
+          {
+            "Sid": "CxMInPlaceListBucket${CXMCustomerAccountId}",
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::${LogSourceBucketName}",
+            "Condition": { "StringLike": { "s3:prefix": "${InPlaceQueryObjectPrefix}/*" } }
+          },
+          {
+            "Sid": "CxMInPlaceGetBucketLocation${CXMCustomerAccountId}",
             "Effect": "Allow",
             "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
             "Action": "s3:GetBucketLocation",
             "Resource": "arn:aws:s3:::${LogSourceBucketName}"
           }
-        ]
-      }
+          ]
+        }
   InPlaceQueryKmsKeyPolicyStatement:
     Condition: isInPlaceQueryKmsGrantNeeded
-    Description: KMS key policy statement to merge into the encryption key's existing policy. Merge it — replacing a key policy without its administrative statements locks the key permanently.
-    Value: !Sub |
-      {
-        "Sid": "CxMInPlaceDecrypt",
-        "Effect": "Allow",
-        "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
-        "Action": ["kms:Decrypt", "kms:DescribeKey"],
-        "Resource": "*"
-      }
+    Description: KMS key policy statements to merge into the encryption key's existing policy, one per reader. Merge them — replacing a key policy without its administrative statements locks the key permanently.
+    Value: !If
+      - hasAdditionalReader
+      - !Sub |
+        [
+        {
+          "Sid": "CxMInPlaceDecrypt${CXMCustomerAccountId}",
+          "Effect": "Allow",
+          "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+          "Action": ["kms:Decrypt", "kms:DescribeKey"],
+          "Resource": "*"
+        },
+        {
+          "Sid": "CxMInPlaceDecrypt${AdditionalCXMCustomerAccountId}",
+          "Effect": "Allow",
+          "Principal": { "AWS": "arn:aws:iam::${AdditionalCXMCustomerAccountId}:root" },
+          "Action": ["kms:Decrypt", "kms:DescribeKey"],
+          "Resource": "*"
+        }
+        ]
+      - !Sub |
+        [
+        {
+          "Sid": "CxMInPlaceDecrypt${CXMCustomerAccountId}",
+          "Effect": "Allow",
+          "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
+          "Action": ["kms:Decrypt", "kms:DescribeKey"],
+          "Resource": "*"
+        }
+        ]
 
   # Log Source Reader
   CxmLogSourceReaderRoleArn:
