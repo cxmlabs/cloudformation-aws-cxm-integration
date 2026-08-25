@@ -6,9 +6,7 @@ Description: >
   bucket and a CloudTrail bucket in the same account get distinct, self-describing roles.
   This may be a different account and region from the management account.
 
-# WHY ONE STACK PER BUCKET: the reader role is granted s3:GetObject on exactly one bucket, and
-# the EventBridge rule matches exactly one bucket name. Pointing one role at several buckets
-# would widen the grant and make the notification stream ambiguous on the CXM side.
+# One stack per bucket: the role's grant and the EventBridge rule each name a single bucket.
 
 Parameters:
   # CXM Accounts
@@ -71,8 +69,7 @@ Parameters:
     Default: ""
     Description: Role name suffix
 
-# An additional reader with no external ID would render a StringEquals on "" — a condition
-# nothing can satisfy, so the trust statement would look present and grant nothing.
+# Without the external ID the trust renders StringEquals on "" — present, satisfiable by nobody.
 Rules:
   AdditionalReaderNeedsExternalId:
     RuleCondition: !Not [ !Equals [ !Ref AdditionalCXMCustomerAccountId, '' ] ]
@@ -92,10 +89,8 @@ Resources:
   #
   # Log Source Reader
   #
-  # The CxmFlowLogs* logical ids are frozen, not stale. Renaming a logical id makes
-  # CloudFormation create the replacement before deleting the original, and both carry the same
-  # explicit RoleName — so an existing stack fails the update with "already exists" and rolls
-  # back. The AWS-visible names come from LogSource and are correct per log type.
+  # CxmFlowLogs* logical ids are frozen: renaming one makes CloudFormation create the
+  # replacement before deleting the original, and both carry the same explicit RoleName.
   #
   ################################################################
   CxmFlowLogsReaderRole:
@@ -115,8 +110,7 @@ Resources:
             Condition:
               StringEquals:
                 sts:ExternalId: !Sub '${CXMExternalId}'
-          # A statement per reader, not one statement with two external IDs: StringEquals
-          # with several values is an OR, which would let either reader in with either id.
+          # A statement per reader: StringEquals with two external IDs is an OR.
           - "Fn::If":
             - hasAdditionalReader
             - Effect: Allow
@@ -147,9 +141,8 @@ Resources:
             Action:
               - "s3:GetObject"
             Resource: !Sub "arn:aws:s3:::${LogSourceBucketName}/*"
-          # No kms:EncryptionContext condition: S3 sets the context to the *object* ARN, so a
-          # bucket-ARN equality test never matches and silently kills the grant. The Resource
-          # is already pinned to the one key, which is the scoping that matters.
+          # No kms:EncryptionContext: S3 sets it to the object ARN, so a bucket-ARN test
+          # never matches. Resource already pins the one key.
           - "Fn::If":
             - isKmsKeyArnSet
             - Effect: Allow
@@ -190,9 +183,8 @@ Resources:
             Resource:
               - !Sub "arn:aws:events:*:${CXMCustomerAccountId}:event-bus/data-plane*"
 
-  # Needs EventBridge notifications enabled on the bucket
-  # (aws s3api put-bucket-notification-configuration --notification-configuration '{"EventBridgeConfiguration":{}}').
-  # Without that the bucket emits nothing and this rule never fires.
+  # Needs EventBridge notifications on the bucket, or this rule never fires:
+  # aws s3api put-bucket-notification-configuration --notification-configuration '{"EventBridgeConfiguration":{}}'
   CxmFlowLogsBucketEventRule:
     Type: AWS::Events::Rule
     Properties:
@@ -233,8 +225,7 @@ Outputs:
     Description: Name of the S3 bucket storing the logs
     Value: !Ref LogSourceBucketName
 
-  # In-place query access. CloudFormation replaces the whole bucket policy and cannot read
-  # the existing one, so the statements are rendered for you to merge — no resource is created.
+  # Rendered, not applied: CloudFormation cannot read the existing bucket policy to merge into.
   InPlaceQueryBucketPolicyStatements:
     Condition: isInPlaceQueryGrantEnabled
     Description: Bucket policy statements to merge into the bucket's existing policy so CXM can query it in place. Keep the statements separate, and keep the account id in each Sid — S3 accepts duplicate Sids but nothing can tell such statements apart afterwards, so the suffix is what lets a second reader's statements merge alongside these and be revoked independently.

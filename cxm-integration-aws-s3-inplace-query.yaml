@@ -9,18 +9,8 @@ Description: >
   existing bucket policy. Set ManageBucketPolicy to "true" only for a bucket dedicated to
   this integration — it REPLACES the whole bucket policy.
 
-# WHY A RESOURCE POLICY: Athena reads S3 as the principal that submitted the query and
-# cannot be handed an assumed-role session, so the identity policy on the CXM reader role
-# (cxm-integration-aws-flowlogs.yaml, or the CUR reader in the root stack) never applies to
-# the scan path. A policy on the bucket itself — and on the KMS key, when the bucket is
-# encrypted — is the only grant that works.
-#
-# The principal is the CXM account root, not a role name: submitting roles are named per
-# tenant and per service, so naming them would break the policy on any rename. Access is
-# narrowed by object prefix instead.
-#
-# WHY OUTPUT-ONLY BY DEFAULT: AWS::S3::BucketPolicy replaces the whole bucket policy, and
-# CloudTrail / VPC Flow Logs buckets carry AWS log-delivery statements that must survive.
+# Athena reads S3 as the query submitter, not the reader role, so only a resource policy
+# works. Output-only by default: AWS::S3::BucketPolicy would replace log-delivery statements.
 
 Parameters:
   CXMCustomerAccountId:
@@ -81,10 +71,8 @@ Conditions:
   isKmsGrantNeededForAdditionalReader: !And [!Condition isKmsKeyArnSet, !Condition hasAdditionalReader]
 
 Resources:
-  # Three separate statements are mandatory: s3:GetBucketLocation does not support the
-  # s3:prefix condition key, so folding it in with s3:ListBucket is rejected as
-  # MalformedPolicy. Do NOT add an aws:CalledVia condition: Athena does not populate
-  # CalledVia on its scan requests, so the condition would deny Athena itself.
+  # Keep the three statements split: GetBucketLocation rejects the s3:prefix condition key.
+  # No aws:CalledVia — Athena does not set it on scans, so the condition would deny Athena.
   CxmInPlaceQueryBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Condition: ManageBucketPolicyEnabled
@@ -93,10 +81,8 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          # The account id is part of every Sid: a bucket read by two CXM environments
-          # carries one statement set each. S3 does accept duplicate Sids, but two statements
-          # sharing one cannot be told apart afterwards, so revoking a single reader would
-          # mean rewriting the other's grant — and Terraform's policy merge rejects them.
+          # Account id in every Sid: S3 accepts duplicates, but then one reader's grant
+          # cannot be revoked without rewriting the other's.
           - Sid: !Sub "CxMInPlaceGetObject${CXMCustomerAccountId}"
             Effect: Allow
             Principal:
@@ -118,8 +104,7 @@ Resources:
               AWS: !Sub "arn:aws:iam::${CXMCustomerAccountId}:root"
             Action: s3:GetBucketLocation
             Resource: !Sub "arn:aws:s3:::${BucketName}"
-          # One Fn::If per statement: CloudFormation does not flatten a list returned into
-          # a list, so a single conditional block holding all three would be invalid.
+          # One Fn::If per statement: CloudFormation does not flatten a list into a list.
           - "Fn::If":
             - hasAdditionalReader
             - Sid: !Sub "CxMInPlaceGetObject${AdditionalCXMCustomerAccountId}"
@@ -176,9 +161,8 @@ Outputs:
       - !Sub '[{"Sid":"CxMInPlaceGetObject${CXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::${BucketName}/${ObjectPrefix}/*"},{"Sid":"CxMInPlaceListBucket${CXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:ListBucket","Resource":"arn:aws:s3:::${BucketName}","Condition":{"StringLike":{"s3:prefix":"${ObjectPrefix}/*"}}},{"Sid":"CxMInPlaceGetBucketLocation${CXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:GetBucketLocation","Resource":"arn:aws:s3:::${BucketName}"},{"Sid":"CxMInPlaceGetObject${AdditionalCXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${AdditionalCXMCustomerAccountId}:root"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::${BucketName}/${ObjectPrefix}/*"},{"Sid":"CxMInPlaceListBucket${AdditionalCXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${AdditionalCXMCustomerAccountId}:root"},"Action":"s3:ListBucket","Resource":"arn:aws:s3:::${BucketName}","Condition":{"StringLike":{"s3:prefix":"${ObjectPrefix}/*"}}},{"Sid":"CxMInPlaceGetBucketLocation${AdditionalCXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${AdditionalCXMCustomerAccountId}:root"},"Action":"s3:GetBucketLocation","Resource":"arn:aws:s3:::${BucketName}"}]'
       - !Sub '[{"Sid":"CxMInPlaceGetObject${CXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::${BucketName}/${ObjectPrefix}/*"},{"Sid":"CxMInPlaceListBucket${CXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:ListBucket","Resource":"arn:aws:s3:::${BucketName}","Condition":{"StringLike":{"s3:prefix":"${ObjectPrefix}/*"}}},{"Sid":"CxMInPlaceGetBucketLocation${CXMCustomerAccountId}","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${CXMCustomerAccountId}:root"},"Action":"s3:GetBucketLocation","Resource":"arn:aws:s3:::${BucketName}"}]'
 
-  # kms:GenerateDataKey is write-side only and deliberately excluded. The identity-policy
-  # kms:Decrypt on the reader role does not substitute for this: the query submitter is
-  # not the role that policy is attached to.
+  # The reader role's kms:Decrypt does not cover the query submitter. GenerateDataKey is
+  # write-side only, so it stays out.
   KmsKeyPolicyStatementJson:
     Condition: isKmsKeyArnSet
     Description: >-
