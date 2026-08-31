@@ -31,7 +31,7 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['false', 'true']
-    Description: Set to true to render the bucket and KMS key policy statements CXM needs to query the bucket in place. Rendering changes nothing in your account — the statements appear as stack outputs for you to merge into the bucket's existing policy yourself.
+    Description: Set to true to render the bucket policy statements CXM needs to query the bucket in place. Rendering changes nothing in your account — the statements appear as a stack output for you to merge into the bucket's existing policy yourself. If the bucket is KMS-encrypted, grant Decrypt separately with the cxm-integration-aws-kms-inplace-grant stack (deployed in the key's account).
   InPlaceQueryObjectPrefix:
     Type: String
     Default: AWSLogs
@@ -61,7 +61,6 @@ Conditions:
   isCURKmsKeyArnSet: !Not [ !Equals [ !Ref CostAndUsageReportS3BucketKmsKeyArn, '' ] ]
   SavingsModificationsEnabled: !Equals [!Ref EnableSavingsModifications, "true"]
   isInPlaceQueryGrantEnabled: !Equals [ !Ref EnableInPlaceQueryGrant, 'true' ]
-  isInPlaceQueryKmsGrantNeeded: !And [ !Condition isInPlaceQueryGrantEnabled, !Condition isCURKmsKeyArnSet ]
 
 Resources:
 
@@ -546,17 +545,9 @@ Outputs:
           }
         ]
       }
-  InPlaceQueryKmsKeyPolicyStatement:
-    Condition: isInPlaceQueryKmsGrantNeeded
-    Description: KMS key policy statement to merge into the encryption key's existing policy. Merge it — replacing a key policy without its administrative statements locks the key permanently.
-    Value: !Sub |
-      {
-        "Sid": "CxMInPlaceDecrypt",
-        "Effect": "Allow",
-        "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
-        "Action": ["kms:Decrypt", "kms:DescribeKey"],
-        "Resource": "*"
-      }
+  # KMS decrypt for in-place queries is granted by the cxm-integration-aws-kms-inplace-grant stack
+  # (a KMS grant, deployed in the key's account), not a key-policy statement — a grant leaves the
+  # existing key policy untouched.
 
   # Notification role
   CxmNotificationRoleArn:
