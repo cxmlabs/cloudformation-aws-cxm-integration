@@ -11,7 +11,6 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `cxm-integration-aws-eks.yaml` | Stack | Optional — Grants CXM read-only access to an EKS cluster via Access Entries (deploy once per cluster) |
 | `cxm-integration-aws-log-source.yaml` | Stack | Optional — Deploys to the account/region hosting a centralized log bucket (VPC Flow Logs or CloudTrail): reader role and EventBridge notifications. **One stack per bucket** |
 | `cxm-integration-aws-s3-inplace-query.yaml` | Stack | Optional — Renders (or applies) the bucket resource-policy statements that let CXM query a CloudTrail or VPC Flow Logs bucket in place with Athena (deploy once per bucket) |
-| `cxm-integration-aws-kms-inplace-grant.yaml` | Stack | Optional — Grants CXM `kms:Decrypt` on a log bucket's KMS key with a KMS grant, so in-place queries can read encrypted objects. Deploy in the **key's** account (for a Control Tower CloudTrail key, the management account) |
 
 ## Prerequisites
 
@@ -32,6 +31,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `CostAndUsageBucketRegion` | No | `us-east-1` | Region of the CUR S3 bucket |
 | `EnableInPlaceQueryGrant` | No | `false` | Set to `true` to render the in-place query statements as stack outputs. See [Querying logs in place](#querying-logs-in-place) |
 | `InPlaceQueryObjectPrefix` | No | `AWSLogs` | Object key prefix the in-place grant is narrowed to, no trailing slash. Set to your report prefix for a CUR bucket |
+| `InPlaceQueryKmsKeyArn` | No | `""` | KMS key CXM must decrypt for in-place queries (typically the Control Tower CloudTrail key, which lives in this management account). When set, this stack creates a KMS grant for the CXM account — no separate stack |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
 | `EnableSavingsModifications` | No | `true` | `false` gives the crawler read-only commitment access — it reports on Savings Plans/RIs but cannot purchase, modify or cancel them, and cannot write CUR report definitions. Use for a read-only proof of concept |
 
@@ -86,17 +86,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `ObjectPrefix` | No | `AWSLogs` | Object key prefix the grant is narrowed to. No trailing `/` — one is added for you |
 | `ManageBucketPolicy` | No | `false` | `true` makes the stack own the bucket policy, **replacing** whatever is attached. Only for a bucket dedicated to this integration |
 
-If the bucket is KMS-encrypted, grant `kms:Decrypt` separately with the KMS Grant Stack below.
-
-### KMS Grant Stack (inline parameters, one per key)
-
-Deploy `cxm-integration-aws-kms-inplace-grant.yaml` in the account and region that **own the key** (for a Control Tower CloudTrail key, the management account).
-
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `KmsKeyArn` | Yes | — | ARN of the KMS key encrypting the log bucket |
-| `CXMCustomerAccountId` | Yes | — | 12-digit CXM AWS account ID that queries the bucket |
-| `AdditionalCXMCustomerAccountId` | No | `""` | Second CXM account that also queries the bucket |
+If the bucket is KMS-encrypted, grant `kms:Decrypt` by setting `InPlaceQueryKmsKeyArn` on the **root stack** (it runs in the management account, where the Control Tower CloudTrail key lives) — no separate stack.
 
 ## Deployment
 
@@ -285,8 +275,8 @@ aws cloudformation describe-stacks \
 ```
 
 Merge those statements into the bucket's existing policy. If the bucket is KMS-encrypted,
-grant Decrypt by deploying the KMS Grant Stack (below) in the key's account — no key-policy
-edit needed.
+set `InPlaceQueryKmsKeyArn` on the root stack to that key's ARN — no separate stack, no
+key-policy edit.
 
 > **Why merge instead of apply?** CloudFormation's `AWS::S3::BucketPolicy` replaces the
 > entire bucket policy. CloudTrail and VPC Flow Logs buckets carry AWS log-delivery
@@ -294,21 +284,11 @@ edit needed.
 > `ManageBucketPolicy=true` only for a bucket dedicated to this integration with no policy
 > of its own.
 
-Then, if the objects are encrypted, deploy the KMS grant stack in the **key's** account:
-
-```bash
-aws cloudformation deploy \
-  --stack-name CxmInPlaceKmsGrant-<KEY_ID> \
-  --template-file cxm-integration-aws-kms-inplace-grant.yaml \
-  --parameter-overrides \
-    KmsKeyArn=<KEY_ARN> \
-    CXMCustomerAccountId=<CXM_ACCOUNT_ID> \
-  --capabilities CAPABILITY_IAM \
-  --region <KEY_REGION>
-```
-
-The stack creates a KMS grant (a small inline Lambda custom resource does it), so CXM gets
-`kms:Decrypt` without touching the key's policy. Deleting the stack revokes the grant.
+For the KMS key, the root stack creates a **KMS grant** for the CXM account when
+`InPlaceQueryKmsKeyArn` is set (a small inline Lambda custom resource does it) — additive,
+it never touches the key policy, and deleting the stack revokes the grant. The root stack
+runs in the management account, where the Control Tower CloudTrail key lives, so no extra
+deployment is needed.
 
 ### 7. Verify Deployment
 
@@ -341,7 +321,7 @@ Set `EnableInPlaceQueryGrant=true` and the stack outputs `InPlaceQueryBucketPoli
 
 That is deliberate. `AWS::S3::BucketPolicy` replaces the **whole** bucket policy and CloudFormation has no way to read the policy already on the bucket, so it cannot merge. CloudTrail and VPC Flow Logs buckets always carry AWS log-delivery statements (`cloudtrail.amazonaws.com`, `delivery.logs.amazonaws.com`); a managed bucket policy would silently delete them and stop your log delivery.
 
-KMS is different: `cxm-integration-aws-kms-inplace-grant.yaml` grants Decrypt with a **KMS grant** — an additive object that never reads or replaces the key policy — so it is safe to apply directly (deploy it in the key's account). See [KMS Grant Stack](#kms-grant-stack-inline-parameters-one-per-key).
+KMS is different: the root stack's `InPlaceQueryKmsKeyArn` param creates a **KMS grant** — an additive object that never reads or replaces the key policy — so it is applied directly, no separate stack. The root stack runs in the management account, where the Control Tower CloudTrail key lives.
 
 Read the statements out of the stack outputs:
 
@@ -385,7 +365,7 @@ The bucket grant looks like this, with your account ID, bucket name and prefix a
 }
 ```
 
-For the KMS key, deploy `cxm-integration-aws-kms-inplace-grant.yaml` in the key's account (see [KMS Grant Stack](#kms-grant-stack-inline-parameters-one-per-key)) — it creates a KMS grant for the CXM account, no key-policy edit.
+For the KMS key, set `InPlaceQueryKmsKeyArn` on the root stack — it creates a KMS grant for the CXM account, no key-policy edit.
 
 Points to keep when you merge the bucket statements:
 

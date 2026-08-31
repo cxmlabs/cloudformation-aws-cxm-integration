@@ -9,9 +9,9 @@ Description: >
   existing bucket policy. Set ManageBucketPolicy to "true" only for a bucket dedicated to
   this integration — it REPLACES the whole bucket policy.
 
-  KMS: if the bucket is encrypted, grant Decrypt separately with the
-  cxm-integration-aws-kms-inplace-grant stack (deployed in the key's account). A grant leaves
-  the existing key policy untouched.
+  KMS: if the bucket is encrypted, set InPlaceQueryKmsKeyArn on the root stack
+  (cxm-integration-aws-root.yaml) — it creates a KMS grant, which leaves the existing key
+  policy untouched.
 
 # Athena reads S3 as the query submitter, not the reader role, so only a resource policy
 # works. Output-only by default: AWS::S3::BucketPolicy would replace log-delivery statements.
