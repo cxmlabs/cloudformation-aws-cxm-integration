@@ -315,7 +315,7 @@ CXM can analyse your logs **in place** — reading the objects straight out of y
 
 This needs a grant the reader roles above cannot provide. Athena reads S3 as the principal that submitted the query and cannot be handed an assumed-role session, so the cross-account role and its external ID never enter the read path. The bucket must grant access in its **own** policy — a resource policy — and, when the objects are encrypted with a customer managed key, that key must allow Decrypt for the CXM account.
 
-### The bucket statements are rendered for you to merge; the KMS grant is applied by its own stack
+### The bucket statements are rendered for you to merge; the KMS grant is applied by the root stack
 
 Set `EnableInPlaceQueryGrant=true` and the stack outputs `InPlaceQueryBucketPolicyStatements`. **You merge those into your existing bucket policy yourself** — no bucket policy resource is created, so turning the parameter on changes nothing in your account.
 
