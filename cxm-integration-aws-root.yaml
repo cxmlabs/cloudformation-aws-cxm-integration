@@ -527,7 +527,9 @@ Resources:
           import boto3
 
           kms = boto3.client("kms")
-          PREFIX = "cxm-inplace-decrypt"
+          # CFN-specific name so this grant is independent of any Terraform-managed grant on
+          # the same key (they coexist as separate grants instead of overwriting each other).
+          PREFIX = "cxm-cfn-inplace-decrypt"
 
           # Self-contained CFN response (the cfnresponse module is not present in the runtime).
           def _respond(event, context, status, physical_id, data=None):
