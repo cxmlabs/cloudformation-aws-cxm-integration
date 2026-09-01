@@ -52,7 +52,7 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['false', 'true']
-    Description: Set to true to render the bucket and KMS key policy statements CXM needs to query the bucket in place. Rendering changes nothing in your account — the statements appear as stack outputs for you to merge into the bucket's existing policy yourself.
+    Description: Set to true to render the bucket policy statements CXM needs to query the bucket in place. Rendering changes nothing in your account — the statements appear as a stack output for you to merge into the bucket's existing policy yourself. If the bucket is KMS-encrypted, set InPlaceQueryKmsKeyArn on the root stack (cxm-integration-aws-root.yaml) — it creates a KMS grant for the CXM account.
   InPlaceQueryObjectPrefix:
     Type: String
     Default: AWSLogs
@@ -81,7 +81,6 @@ Conditions:
   isKmsKeyArnSet: !Not [ !Equals [ !Ref LogSourceBucketKmsKeyArn, '' ] ]
   hasAdditionalReader: !Not [ !Equals [ !Ref AdditionalCXMCustomerAccountId, '' ] ]
   isInPlaceQueryGrantEnabled: !Equals [ !Ref EnableInPlaceQueryGrant, 'true' ]
-  isInPlaceQueryKmsGrantNeeded: !And [ !Condition isInPlaceQueryGrantEnabled, !Condition isKmsKeyArnSet ]
 
 Resources:
 
@@ -309,38 +308,9 @@ Outputs:
           }
           ]
         }
-  InPlaceQueryKmsKeyPolicyStatement:
-    Condition: isInPlaceQueryKmsGrantNeeded
-    Description: KMS key policy statements to merge into the encryption key's existing policy, one per reader. Merge them — replacing a key policy without its administrative statements locks the key permanently.
-    Value: !If
-      - hasAdditionalReader
-      - !Sub |
-        [
-        {
-          "Sid": "CxMInPlaceDecrypt${CXMCustomerAccountId}",
-          "Effect": "Allow",
-          "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
-          "Action": ["kms:Decrypt", "kms:DescribeKey"],
-          "Resource": "*"
-        },
-        {
-          "Sid": "CxMInPlaceDecrypt${AdditionalCXMCustomerAccountId}",
-          "Effect": "Allow",
-          "Principal": { "AWS": "arn:aws:iam::${AdditionalCXMCustomerAccountId}:root" },
-          "Action": ["kms:Decrypt", "kms:DescribeKey"],
-          "Resource": "*"
-        }
-        ]
-      - !Sub |
-        [
-        {
-          "Sid": "CxMInPlaceDecrypt${CXMCustomerAccountId}",
-          "Effect": "Allow",
-          "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
-          "Action": ["kms:Decrypt", "kms:DescribeKey"],
-          "Resource": "*"
-        }
-        ]
+  # KMS decrypt for in-place queries is granted by the root stack's InPlaceQueryKmsKeyArn param
+  # (a KMS grant in the key's account), not a key-policy statement — a grant leaves the existing
+  # key policy untouched.
 
   # Log Source Reader
   CxmLogSourceReaderRoleArn:

@@ -10,7 +10,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `cxm-integration-aws-sub-account.yaml` | StackSet | Deploys to member accounts: asset crawler role and EventBridge CloudFormation notifier |
 | `cxm-integration-aws-eks.yaml` | Stack | Optional — Grants CXM read-only access to an EKS cluster via Access Entries (deploy once per cluster) |
 | `cxm-integration-aws-log-source.yaml` | Stack | Optional — Deploys to the account/region hosting a centralized log bucket (VPC Flow Logs or CloudTrail): reader role and EventBridge notifications. **One stack per bucket** |
-| `cxm-integration-aws-s3-inplace-query.yaml` | Stack | Optional — Renders (or applies) the bucket/KMS resource-policy statements that let CXM query a CloudTrail or VPC Flow Logs bucket in place with Athena (deploy once per bucket) |
+| `cxm-integration-aws-s3-inplace-query.yaml` | Stack | Optional — Renders (or applies) the bucket resource-policy statements that let CXM query a CloudTrail or VPC Flow Logs bucket in place with Athena (deploy once per bucket) |
 
 ## Prerequisites
 
@@ -31,6 +31,7 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `CostAndUsageBucketRegion` | No | `us-east-1` | Region of the CUR S3 bucket |
 | `EnableInPlaceQueryGrant` | No | `false` | Set to `true` to render the in-place query statements as stack outputs. See [Querying logs in place](#querying-logs-in-place) |
 | `InPlaceQueryObjectPrefix` | No | `AWSLogs` | Object key prefix the in-place grant is narrowed to, no trailing slash. Set to your report prefix for a CUR bucket |
+| `InPlaceQueryKmsKeyArn` | No | `""` | KMS key CXM must decrypt for in-place queries (typically the Control Tower CloudTrail key, which lives in this management account). When set, this stack creates a KMS grant for the CXM account — no separate stack |
 | `Prefix` | No | `cxm` | Namespace prefix for resource names |
 | `EnableSavingsModifications` | No | `true` | `false` gives the crawler read-only commitment access — it reports on Savings Plans/RIs but cannot purchase, modify or cancel them, and cannot write CUR report definitions. Use for a read-only proof of concept |
 
@@ -83,8 +84,9 @@ This project deploys CloudFormation stacks that grant CXM cross-account read acc
 | `AdditionalCXMCustomerAccountId` | No | `""` | Second CXM account that also queries this bucket. See [Several CXM environments reading one bucket](#several-cxm-environments-reading-one-bucket) |
 | `BucketName` | Yes | — | Name of the CloudTrail or VPC Flow Logs bucket to grant query access to |
 | `ObjectPrefix` | No | `AWSLogs` | Object key prefix the grant is narrowed to. No trailing `/` — one is added for you |
-| `KmsKeyArn` | No | `""` | KMS key ARN if the bucket is encrypted. Renders the key policy statement in the outputs |
 | `ManageBucketPolicy` | No | `false` | `true` makes the stack own the bucket policy, **replacing** whatever is attached. Only for a bucket dedicated to this integration |
+
+If the bucket is KMS-encrypted, grant `kms:Decrypt` by setting `InPlaceQueryKmsKeyArn` on the **root stack** (it runs in the management account, where the Control Tower CloudTrail key lives) — no separate stack.
 
 ## Deployment
 
@@ -272,15 +274,21 @@ aws cloudformation describe-stacks \
   --region <BUCKET_REGION>
 ```
 
-Merge those statements into the bucket's existing policy, and — if you passed `KmsKeyArn` —
-merge `KmsKeyPolicyStatementJson` into the key policy.
+Merge those statements into the bucket's existing policy. If the bucket is KMS-encrypted,
+set `InPlaceQueryKmsKeyArn` on the root stack to that key's ARN — no separate stack, no
+key-policy edit.
 
 > **Why merge instead of apply?** CloudFormation's `AWS::S3::BucketPolicy` replaces the
 > entire bucket policy. CloudTrail and VPC Flow Logs buckets carry AWS log-delivery
 > statements; replacing them silently stops log delivery. Set
 > `ManageBucketPolicy=true` only for a bucket dedicated to this integration with no policy
-> of its own. CloudFormation cannot edit the policy of a pre-existing KMS key at all, so
-> the KMS statement is always a manual merge.
+> of its own.
+
+For the KMS key, the root stack creates a **KMS grant** for the CXM account when
+`InPlaceQueryKmsKeyArn` is set (a small inline Lambda custom resource does it) — additive,
+it never touches the key policy, and deleting the stack revokes the grant. The root stack
+runs in the management account, where the Control Tower CloudTrail key lives, so no extra
+deployment is needed.
 
 ### 7. Verify Deployment
 
@@ -305,13 +313,15 @@ Share the outputs with CXM to complete the integration.
 
 CXM can analyse your logs **in place** — reading the objects straight out of your bucket instead of copying them into ours. Nothing leaves your account and you pay no duplicate storage.
 
-This needs a grant the reader roles above cannot provide. Athena reads S3 as the principal that submitted the query and cannot be handed an assumed-role session, so the cross-account role and its external ID never enter the read path. The bucket must grant access in its **own** policy — a resource policy — and, when the objects are encrypted with a customer managed key, the key must do the same in its key policy.
+This needs a grant the reader roles above cannot provide. Athena reads S3 as the principal that submitted the query and cannot be handed an assumed-role session, so the cross-account role and its external ID never enter the read path. The bucket must grant access in its **own** policy — a resource policy — and, when the objects are encrypted with a customer managed key, that key must allow Decrypt for the CXM account.
 
-### These templates render the statements, they do not apply them
+### The bucket statements are rendered for you to merge; the KMS grant is applied by the root stack
 
-Set `EnableInPlaceQueryGrant=true` and the stack outputs `InPlaceQueryBucketPolicyStatements` (and `InPlaceQueryKmsKeyPolicyStatement`, when a KMS key ARN is set). **You merge them into your existing policies yourself.** No bucket or key policy resource is created, so turning the parameter on changes nothing in your account.
+Set `EnableInPlaceQueryGrant=true` and the stack outputs `InPlaceQueryBucketPolicyStatements`. **You merge those into your existing bucket policy yourself** — no bucket policy resource is created, so turning the parameter on changes nothing in your account.
 
-That is deliberate. `AWS::S3::BucketPolicy` replaces the **whole** bucket policy and CloudFormation has no way to read the policy already on the bucket, so it cannot merge. CloudTrail and VPC Flow Logs buckets always carry AWS log-delivery statements (`cloudtrail.amazonaws.com`, `delivery.logs.amazonaws.com`); a managed bucket policy would silently delete them and stop your log delivery. CloudFormation likewise has no resource type for the policy of an existing KMS key.
+That is deliberate. `AWS::S3::BucketPolicy` replaces the **whole** bucket policy and CloudFormation has no way to read the policy already on the bucket, so it cannot merge. CloudTrail and VPC Flow Logs buckets always carry AWS log-delivery statements (`cloudtrail.amazonaws.com`, `delivery.logs.amazonaws.com`); a managed bucket policy would silently delete them and stop your log delivery.
+
+KMS is different: the root stack's `InPlaceQueryKmsKeyArn` param creates a **KMS grant** — an additive object that never reads or replaces the key policy — so it is applied directly, no separate stack. The root stack runs in the management account, where the Control Tower CloudTrail key lives.
 
 Read the statements out of the stack outputs:
 
@@ -355,26 +365,14 @@ The bucket grant looks like this, with your account ID, bucket name and prefix a
 }
 ```
 
-And the key grant:
+For the KMS key, set `InPlaceQueryKmsKeyArn` on the root stack — it creates a KMS grant for the CXM account, no key-policy edit.
 
-```json
-{
-  "Sid": "CxMInPlaceDecrypt000000000000",
-  "Effect": "Allow",
-  "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
-  "Action": ["kms:Decrypt", "kms:DescribeKey"],
-  "Resource": "*"
-}
-```
-
-> **Merge the KMS statement into the key's current policy — never replace it.** A key policy replaced without its administrative statements locks the key permanently: no rotation, no deletion and no further policy edit, by anyone, including you. Read the current policy first with `aws kms get-key-policy --key-id <KEY_ARN> --policy-name default`, add the statement to its `Statement` array, and put the whole document back.
-
-Four points to keep when you adapt these statements:
+Points to keep when you merge the bucket statements:
 
 - **Keep the three bucket statements separate.** `s3:GetBucketLocation` does not support the `s3:prefix` condition key, so folding it in with `s3:ListBucket` makes AWS reject the whole policy as `MalformedPolicy`. A rejected `put-bucket-policy` leaves the previous policy in place, which looks like success — always read the policy back afterwards.
 - **Do not add an `aws:CalledVia` condition.** Athena does not populate `aws:CalledVia` on its scan requests, so the condition denies the very queries you are enabling.
 - **The principal is the CXM account, not a role.** Access is narrowed by object prefix instead. Our submitting roles are named per tenant and per service, so naming them would break your policy every time one is renamed.
-- **`kms:GenerateDataKey` is not needed.** It is write-side only; in-place querying only ever decrypts.
+- **The KMS grant covers `Decrypt` only.** `GenerateDataKey` is write-side; in-place querying only ever decrypts.
 - **Keep the account id in each `Sid`.** It is what lets a second CXM environment's statements sit alongside these. S3 does accept two statements sharing a `Sid`, but nothing can tell them apart afterwards, so revoking one reader would mean rewriting the other's grant.
 
 ### Several CXM environments reading one bucket

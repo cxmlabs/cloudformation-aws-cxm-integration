@@ -31,13 +31,23 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['false', 'true']
-    Description: Set to true to render the bucket and KMS key policy statements CXM needs to query the bucket in place. Rendering changes nothing in your account — the statements appear as stack outputs for you to merge into the bucket's existing policy yourself.
+    Description: Set to true to render the bucket policy statements CXM needs to query the bucket in place. Rendering changes nothing in your account — the statements appear as a stack output for you to merge into the bucket's existing policy yourself. If the queried objects are KMS-encrypted, set InPlaceQueryKmsKeyArn — this stack then creates a KMS grant for the CXM account.
   InPlaceQueryObjectPrefix:
     Type: String
     Default: AWSLogs
     Description: Object key prefix the in-place query grant is narrowed to, without a trailing slash. Set this to your report prefix for a CUR bucket.
     AllowedPattern: '^[A-Za-z0-9!_.*''()\-]+(/[A-Za-z0-9!_.*''()\-]+)*$'
     ConstraintDescription: Must be an S3 key prefix with no leading or trailing slash (e.g. AWSLogs)
+  InPlaceQueryKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional — ARN of the KMS key CXM must decrypt for in-place queries (typically the
+      Control Tower CloudTrail key, which lives in this management account). When set, this
+      stack creates a KMS grant for the CXM account — additive, it never touches the key
+      policy. Leave empty if the queried objects are not KMS-encrypted.
+    AllowedPattern: '^(arn:aws:kms:[a-z0-9-]+:\d{12}:key/(mrk-)?[a-f0-9-]+)?$'
+    ConstraintDescription: Must be a valid KMS key ARN or empty
   # Prefix
   Prefix:
     Type: String
@@ -61,7 +71,7 @@ Conditions:
   isCURKmsKeyArnSet: !Not [ !Equals [ !Ref CostAndUsageReportS3BucketKmsKeyArn, '' ] ]
   SavingsModificationsEnabled: !Equals [!Ref EnableSavingsModifications, "true"]
   isInPlaceQueryGrantEnabled: !Equals [ !Ref EnableInPlaceQueryGrant, 'true' ]
-  isInPlaceQueryKmsGrantNeeded: !And [ !Condition isInPlaceQueryGrantEnabled, !Condition isCURKmsKeyArnSet ]
+  isInPlaceKmsGrantSet: !Not [ !Equals [ !Ref InPlaceQueryKmsKeyArn, '' ] ]
 
 Resources:
 
@@ -463,6 +473,132 @@ Resources:
 # Outputs
 #
 ################################################################
+  ################################################################
+  #
+  # In-place query KMS grant
+  #
+  # A KMS grant (additive, never touches the key policy) gives the CXM account kms:Decrypt on
+  # the in-place query key. CloudFormation has no native KMS-grant resource, so a small inline
+  # Lambda custom resource creates it on stack create and revokes it on stack delete. The grant
+  # lives in this account, which is where the Control Tower CloudTrail key is.
+  #
+  ################################################################
+  KmsGrantFunctionRole:
+    Type: AWS::IAM::Role
+    Condition: isInPlaceKmsGrantSet
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: kms-inplace-grant
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:CreateGrant
+                  - kms:RevokeGrant
+                  - kms:ListGrants
+                Resource: !Ref InPlaceQueryKmsKeyArn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+  KmsGrantFunction:
+    Type: AWS::Lambda::Function
+    Condition: isInPlaceKmsGrantSet
+    Properties:
+      Description: Manages the CXM in-place-query KMS grant for the stack lifecycle
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt KmsGrantFunctionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import urllib.request
+          import boto3
+
+          kms = boto3.client("kms")
+          # CFN-specific name so this grant is independent of any Terraform-managed grant on
+          # the same key (they coexist as separate grants instead of overwriting each other).
+          PREFIX = "cxm-cfn-inplace-decrypt"
+
+          # Self-contained CFN response (the cfnresponse module is not present in the runtime).
+          def _respond(event, context, status, physical_id, data=None):
+              body = json.dumps({
+                  "Status": status,
+                  "Reason": f"See CloudWatch log stream {context.log_stream_name}",
+                  "PhysicalResourceId": physical_id,
+                  "StackId": event["StackId"],
+                  "RequestId": event["RequestId"],
+                  "LogicalResourceId": event["LogicalResourceId"],
+                  "Data": data or {},
+              }).encode()
+              req = urllib.request.Request(
+                  event["ResponseURL"], data=body, method="PUT",
+                  headers={"content-type": "", "content-length": str(len(body))},
+              )
+              urllib.request.urlopen(req)
+
+          def _managed_grants(key_id, accounts):
+              names = {f"{PREFIX}-{a}" for a in accounts}
+              found, marker = {}, None
+              while True:
+                  kw = {"KeyId": key_id, "Limit": 100}
+                  if marker:
+                      kw["Marker"] = marker
+                  resp = kms.list_grants(**kw)
+                  for g in resp.get("Grants", []):
+                      if g.get("Name") in names:
+                          found[g["Name"]] = g["GrantId"]
+                  if resp.get("Truncated"):
+                      marker = resp["NextMarker"]
+                  else:
+                      break
+              return found
+
+          def handler(event, context):
+              rt = event["RequestType"]
+              props = event.get("ResourceProperties", {})
+              key_id = props.get("KmsKeyArn", "")
+              accounts = [a for a in props.get("GranteeAccountIds", []) if a]
+              pid = event.get("PhysicalResourceId") or f"{PREFIX}@{key_id}"
+              try:
+                  have = _managed_grants(key_id, accounts)
+                  if rt in ("Create", "Update"):
+                      for a in accounts:
+                          name = f"{PREFIX}-{a}"
+                          if name not in have:  # create_grant is not idempotent; skip if present
+                              kms.create_grant(
+                                  KeyId=key_id,
+                                  GranteePrincipal=f"arn:aws:iam::{a}:root",
+                                  Operations=["Decrypt", "DescribeKey"],
+                                  Name=name,
+                              )
+                  elif rt == "Delete":
+                      for gid in have.values():
+                          kms.revoke_grant(KeyId=key_id, GrantId=gid)
+                  _respond(event, context, "SUCCESS", pid)
+              except Exception as e:
+                  _respond(event, context, "FAILED", pid, {"Error": str(e)})
+
+  CxmInPlaceKmsGrant:
+    Type: AWS::CloudFormation::CustomResource
+    Condition: isInPlaceKmsGrantSet
+    Properties:
+      ServiceToken: !GetAtt KmsGrantFunction.Arn
+      KmsKeyArn: !Ref InPlaceQueryKmsKeyArn
+      GranteeAccountIds:
+        - !Ref CXMCustomerAccountId
+
 Outputs:
   # Diagnostic: deployment info
   DeployedAccountId:
@@ -545,17 +681,6 @@ Outputs:
             "Resource": "arn:aws:s3:::${CostAndUsageReportS3BucketName}"
           }
         ]
-      }
-  InPlaceQueryKmsKeyPolicyStatement:
-    Condition: isInPlaceQueryKmsGrantNeeded
-    Description: KMS key policy statement to merge into the encryption key's existing policy. Merge it — replacing a key policy without its administrative statements locks the key permanently.
-    Value: !Sub |
-      {
-        "Sid": "CxMInPlaceDecrypt",
-        "Effect": "Allow",
-        "Principal": { "AWS": "arn:aws:iam::${CXMCustomerAccountId}:root" },
-        "Action": ["kms:Decrypt", "kms:DescribeKey"],
-        "Resource": "*"
       }
 
   # Notification role
